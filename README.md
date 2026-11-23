@@ -107,9 +107,9 @@ result/
 | `src/` | 当前几何生成流水线、单物体与批量入口、结果 viewer |
 | `prompts/` | Fal prompt 的中英文版本及修订说明 |
 | `manifests/` | 本机批量示例；示例中的输入路径需按实际数据修改 |
-| `third_party/` | SAM3D、DINOv2 和浏览器依赖源码 |
+| `third_party/` | 几何流程使用的 SAM3D、DINOv2 源码；不包含 viewer 浏览器依赖 |
 | `align/` | 后续材质模型的 bbox 与 DINOv3 / SIFT 配准，独立运行，当前几何阶段暂不接入 |
 
 `src/run_pipeline.py --bbox` 仅用于测试几何生成后的 bbox 等比缩放与平移配准，默认关闭。第一步几何输出使用上面的无 `--bbox` 命令；后续配准保留原始 `rodin.glb`、`transform.json`、过滤高斯及对应 `.work/` 即可。
 
-批量入口、viewer、完整 API 参数及变换说明见 [src/README.md](src/README.md)。后续配准的独立输入输出约定见 [align/README.md](align/README.md)。
+批量入口、viewer、完整 API 参数及变换说明见 [src/README.md](src/README.md)。viewer 为可选工具，其 Three.js / Spark 浏览器依赖不随仓库提交，使用时需本地另行提供；单物体几何生成不需要这些依赖。后续配准的独立输入输出约定见 [align/README.md](align/README.md)。

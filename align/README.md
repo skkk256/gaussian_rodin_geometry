@@ -87,6 +87,6 @@ python -m http.server 8910 --bind 0.0.0.0 --directory /absolute/path/gaussian_ro
 
 访问 `http://localhost:8910/align/output/`。八个图层为原始高斯、过滤高斯、未归一化 FPS、condition FPS、原始 Rodin、逆变换、逆变换加 bbox、最终结果。默认显示原始高斯和最终结果。四个模型阶段共享一次几何加载，贴图与调试图片按需加载，静止时停止连续渲染。
 
-输出中的原始资产使用文件链接；移动生成结果或源高斯后需重新生成这些链接。前端库复用项目 `third_party/three` 和 `third_party/spark`，保留上游许可证，不依赖 CDN 或旧 viewer 服务。
+输出中的原始资产使用文件链接；移动生成结果或源高斯后需重新生成这些链接。可选 viewer 使用本地 `third_party/three` 和 `third_party/spark`，这些浏览器依赖不随 Git 提交，使用时需另行提供并保留上游许可证。几何生成与配准计算不需要这些浏览器依赖。
 
 配准使用共享的 `ckpt/dinov3` 链接，当前指向 `/root/Lab/EditLocalization/sk_release/ckpt/dinov3`；迁移时更新链接或传 `--weights`。Python 额外依赖见 `align/requirements.txt`：`transformers==5.2.0`、`nvdiffrast==0.4.0`，已在现有 `sam3d-objects` 环境安装。CUDA 扩展使用环境已有安装；如需构建，只能在测试容器的项目目录外进行。

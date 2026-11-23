@@ -152,7 +152,7 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 
 点击「重新生成」提交一次新请求，范围可选「仅重跑 Rodin」或「重跑 Fal + Rodin」。前者复用 Fal、过滤高斯和精确条件点，后者复用原四视图与朝向并重做 Fal、过滤和采样。均保留原来的 bbox 开关和固定 API 参数，Rodin 使用一个新 seed。重跑串行执行，页面显示排队 / 运行 / 成功 / 失败及日志；完成后选择相应版本即可比较。
 
-重跑不会覆盖首次结果；独立结果和工作目录保存为 `.viewer/<结果路径hash>/<run_id>/result/<scene_id>/<object_id>/` 与对应的 `work/`，每个结果仍是相同八文件结构，且有自己的 `timing.json`。viewer 的 HTML、JS 和本地 Three.js / Spark 依赖都随项目提供，不写进结果目录，也不通过网页暴露凭据或工作目录。
+重跑不会覆盖首次结果；独立结果和工作目录保存为 `.viewer/<结果路径hash>/<run_id>/result/<scene_id>/<object_id>/` 与对应的 `work/`，每个结果仍是相同八文件结构，且有自己的 `timing.json`。viewer 的 HTML、JS 随项目提供；Three.js / Spark 浏览器依赖不随 Git 提交，使用 viewer 时需本地提供 `third_party/viewer/three/` 和 `third_party/viewer/spark/`，保留对应上游许可证。几何生成不需要这些浏览器依赖。viewer 不写进结果目录，也不通过网页暴露凭据或工作目录。
 
 ## 完整耗时记录
 

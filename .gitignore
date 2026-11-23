@@ -9,6 +9,9 @@
 /data/
 /temp/
 /align/output/
+/third_party/viewer/
+/third_party/three/
+/third_party/spark/
 __pycache__/
 *.py[cod]
 .pytest_cache/
