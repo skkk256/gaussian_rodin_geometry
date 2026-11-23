@@ -61,6 +61,7 @@ class Task:
     lock: TextIO
     queued_at: float
     prepared: tuple[dict, dict] | None = None
+    image_only: bool = False
 
 
 class Pipeline:
@@ -173,23 +174,26 @@ class Pipeline:
         data, frame = task.prepared
         filtered_path = work / 'gaussian_filter.ply'
         if filtered_path.exists():
+            task.image_only = (work / 'image-only.json').is_file()
             with timing.stage('fal_refine', cached=True):
                 state = json.loads((work / 'fal-request.json').read_text())
                 assert state['status'] == 'completed' and state['outputSha256'] == sha256(work / 'fal_refine.png')
             with timing.stage('foreground_filter', cached=True):
-                assert len(read_ply(filtered_path)['xyz']) > 0
+                assert task.image_only or len(read_ply(filtered_path)['xyz']) > 0
         else:
             selection = dict(beforeCount=len(data['xyz']), minimumRetainedFraction=MIN_FOREGROUND_RETAINED_FRACTION,
                              selectedModel=None, attempts=[])
-            for model, directory, seed in ((FAL_MODEL, 'fal_gpt', None), (NANO_MODEL, 'fal_nano', task.job.seed)):
+            attempts = ((FAL_MODEL, 'fal_gpt', None), (NANO_MODEL, 'fal_nano', task.job.seed),
+                        (NANO_MODEL, 'fal_nano_2', (task.job.seed + 1) % 65536))
+            for index, (model, directory, seed) in enumerate(attempts):
                 attempt = work / directory
                 attempt.mkdir(exist_ok=True)
                 self.phase(task, f'{model}: four-view refinement')
-                with timing.stage('fal_refine' if seed is None else 'fal_nano_retry', cached=(attempt / 'fal_refine.png').exists()):
+                with timing.stage('fal_refine' if seed is None else f'fal_nano_retry_{index}', cached=(attempt / 'fal_refine.png').exists()):
                     fal_image = api.refine(work / 'gaussian.png', self.prompt, attempt, nano_seed=seed)
                     views = split_views(read_rgb(fal_image))
                 with self.segmentation.use(timing):
-                    with timing.stage('foreground_filter' if seed is None else 'foreground_filter_nano'):
+                    with timing.stage('foreground_filter' if seed is None else f'foreground_filter_nano_{index}'):
                         self.phase(task, 'U2Net + ISNet foreground masks and single-view background veto')
                         if self.segmenter is None:
                             self.segmenter = ForegroundSegmenter(PROJECT / 'ckpt/u2net.onnx', PROJECT / 'ckpt/isnet-general-use.onnx')
@@ -197,26 +201,36 @@ class Pipeline:
                         filtered = filter_foreground(data, frame, alpha)
                 retained = len(filtered['xyz']) / len(data['xyz'])
                 accepted = retained >= MIN_FOREGROUND_RETAINED_FRACTION
+                task.image_only = not accepted and index == 2
                 state = json.loads((attempt / 'fal-request.json').read_text())
-                selection['attempts'].append(dict(model=model, requestId=state['job']['request_id'],
+                selection['attempts'].append(dict(model=model, seed=seed, requestId=state['job']['request_id'],
                                                   afterCount=len(filtered['xyz']), retainedFraction=retained,
                                                   status='selected' if accepted else 'rejected'))
                 if accepted:
                     selection['selectedModel'] = model
+                if task.image_only:
+                    selection['selectedModel'] = FAL_MODEL
+                    selection['attempts'][0]['status'] = 'selected_images_only'
                 write_json(work / 'foreground_filter.json', selection)
                 self.phase(task, f'{model}: retained {len(filtered["xyz"])}/{len(data["xyz"])} Gaussians '
                                 f'({retained:.2%}); {"accepted" if accepted else "below 30% retention"}')
-                if not accepted:
-                    if seed is None:
-                        self.phase(task, 'More than 70% removed; retrying once with Nano Banana 2.1 using the original input')
+                if not accepted and not task.image_only:
+                    self.phase(task, f'More than 70% removed; starting Nano Banana attempt {index + 1}/2 using the original input')
                     continue
-                shutil.copyfile(fal_image, work / 'fal_refine.png')
-                shutil.copyfile(attempt / 'fal-request.json', work / 'fal-request.json')
+                if task.image_only:
+                    self.phase(task, 'Both Nano attempts retained fewer than 30%; Rodin will use the original GPT images only, without point-cloud conditioning')
+                    write_json(work / 'image-only.json', dict(reason='Both Nano attempts retained fewer than 30%', nanoAttempts=2,
+                               imageModel=FAL_MODEL,
+                               retainedCount=len(filtered['xyz']), beforeCount=len(data['xyz']),
+                               minimumRetainedFraction=MIN_FOREGROUND_RETAINED_FRACTION))
+                selected_attempt = work / 'fal_gpt' if task.image_only else attempt
+                shutil.copyfile(selected_attempt / 'fal_refine.png', work / 'fal_refine.png')
+                shutil.copyfile(selected_attempt / 'fal-request.json', work / 'fal-request.json')
                 temporary = work / '.gaussian_filter.ply'
                 write_ply(task.job.source, filtered['records'], temporary)
                 temporary.replace(filtered_path)
                 break
-            assert filtered_path.exists(), 'GPT and Nano Banana both retained fewer than 30% of Gaussians; inspect foreground_filter.json'
+            assert filtered_path.exists()
         canonical_to_world = np.asarray(frame['canonicalToWorld']).reshape(4, 4, order='F')
         filtered_image = work / 'gaussian_filter.png'
         condition_path = work / 'condition.npz'
@@ -224,9 +238,12 @@ class Pipeline:
             with timing.stage('filtered_gaussian_render', cached=filtered_image.exists()):
                 if not filtered_image.exists():
                     self.phase(task, 'Filtered Gaussian four-view render with the original cameras')
-                    write_rgb(filtered_image, join_views(self.renderer.render(read_ply(filtered_path), frame, FOUR_ANGLES, 1024)))
-            with timing.stage('sampling_fps_normalization', cached=condition_path.exists()):
-                if not condition_path.exists():
+                    filtered = read_ply(filtered_path)
+                    views = (np.full((4, 1024, 1024, 3), 255, np.uint8) if len(filtered['xyz']) == 0
+                             else self.renderer.render(filtered, frame, FOUR_ANGLES, 1024))
+                    write_rgb(filtered_image, join_views(views))
+            with timing.stage('sampling_fps_normalization', cached=condition_path.exists(), skipped=task.image_only):
+                if not task.image_only and not condition_path.exists():
                     self.phase(task, 'Gaussian volume sampling, FPS 4096, independent normalization to [-0.98, 0.98]')
                     canonical_points = self.sampler.sample(read_ply(filtered_path), canonical_to_world)
                     condition, normalization = normalize_points(canonical_points)
@@ -237,10 +254,12 @@ class Pipeline:
 
     def generate(self, task: Task, api: GenerationAPI) -> None:
         work, timing = task.work, task.timing
-        self.phase(task, 'Rodin Gen-2.5-Medium / medium / point-cloud weight 0.3')
+        self.phase(task, 'Rodin Gen-2.5-Medium / medium / ' + ('images only' if task.image_only else 'point-cloud weight 0.3'))
         with timing.stage('rodin_generate', cached=(work / 'rodin.glb').exists()):
-            with np.load(work / 'condition.npz') as saved:
-                condition = saved['points']
+            condition = None
+            if not task.image_only:
+                with np.load(work / 'condition.npz') as saved:
+                    condition = saved['points']
             views = split_views(read_rgb(work / 'fal_refine.png'))
             raw_mesh = api.rodin(views, condition, task.job.seed, work)
             validate_glb(raw_mesh)
@@ -250,20 +269,28 @@ class Pipeline:
         with timing.stage('inverse_transform'):
             frame = json.loads((work / 'canonical.json').read_text())
             canonical_to_world = np.asarray(frame['canonicalToWorld']).reshape(4, 4, order='F')
-            with np.load(work / 'condition.npz') as saved:
-                canonical_points, condition, normalization = saved['canonical'], saved['points'], saved['normalization']
-            matrix = canonical_to_world @ np.linalg.inv(normalization)
-            restored = condition @ matrix[:3, :3].T + matrix[:3, 3]
-            world = canonical_points @ canonical_to_world[:3, :3].T + canonical_to_world[:3, 3]
-            assert np.allclose(restored, world, atol=1e-6, rtol=1e-6), 'Condition inverse does not restore the sampled world points'
-        with timing.stage('bbox_registration', skipped=not self.bbox):
-            if self.bbox:
+            if task.image_only:
+                matrix = canonical_to_world
+                self.phase(task, 'Image-only output: canonical-frame placement; no point-cloud normalization inverse')
+            else:
+                with np.load(work / 'condition.npz') as saved:
+                    canonical_points, condition, normalization = saved['canonical'], saved['points'], saved['normalization']
+                matrix = canonical_to_world @ np.linalg.inv(normalization)
+                restored = condition @ matrix[:3, :3].T + matrix[:3, 3]
+                world = canonical_points @ canonical_to_world[:3, :3].T + canonical_to_world[:3, 3]
+                assert np.allclose(restored, world, atol=1e-6, rtol=1e-6), 'Condition inverse does not restore the sampled world points'
+        with timing.stage('bbox_registration', skipped=not self.bbox or task.image_only):
+            if self.bbox and task.image_only:
+                self.phase(task, 'Skipping test bbox registration: image-only output has no condition FPS')
+            if self.bbox and not task.image_only:
                 self.phase(task, 'Fixed-rotation bbox registration to unnormalized filtered-Gaussian FPS')
                 obb = compute_semantic_obb(read_ply(work / 'gaussian_filter.ply')['xyz'])
                 matrix = register_bbox(work / 'rodin.glb', world, matrix, obb)
         with timing.stage('write_transform'):
-            write_json(work / 'transform.json', dict(matrixOrder='column-major',
-                       rodinToWorld=dict(matrix=matrix.flatten(order='F').tolist())))
+            transform = dict(matrixOrder='column-major', rodinToWorld=dict(matrix=matrix.flatten(order='F').tolist()))
+            if task.image_only:
+                transform.update(imageOnly=True, alignment='canonical-frame-only', referenceObb=frame['obb'])
+            write_json(work / 'transform.json', transform)
         image = work / 'rodin.png'
         with self.gpu.use(timing):
             with timing.stage('mesh_render', cached=image.exists()):

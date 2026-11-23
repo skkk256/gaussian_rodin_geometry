@@ -2,7 +2,7 @@
 
 独立项目，代码、第三方 Python 源码和权重入口都位于 `gaussian_rodin/` 内。不依赖旧 deploy、Docker、viewer 或内部 16127 服务。
 
-流程固定为：**Gaussian PLY → 属性预过滤 → SAM3D 五视角朝向投票 → canonical 四视图 → Fal 清理补全 → 前景分割过滤高斯 → 高斯体积候选采样 → FPS 4096 → 独立点云归一化 → Rodin → 保存完整逆变换。**
+常规流程为：**Gaussian PLY → 属性预过滤 → SAM3D 五视角朝向投票 → canonical 四视图 → Fal 清理补全 → 前景分割过滤高斯 → 高斯体积候选采样 → FPS 4096 → 独立点云归一化 → Rodin → 保存完整逆变换。** GPT 和两次 Nano 的过滤结果均不达标时，使用第一次 GPT 图片走仅图像 Rodin 分支，跳过点云相关步骤，输出待配准模型。
 
 默认只执行完整逆变换；`--bbox` 是测试用的额外配准参数，第一步几何生成暂时不用。`align/` 留给后续材质模型配准，当前阶段暂不接入，不执行 ICP、DINO/SIFT 配准，也不生成材质。后续纹理化若保持原始 Rodin 顶点坐标，可直接使用同一个 `transform.json` 恢复世界坐标。
 
@@ -40,7 +40,7 @@
 
 输入固定为单物体、binary little-endian Gaussian PLY，属性为 float32：`x/y/z`、`opacity`、`scale_0..2`、`rot_0..3`（wxyz）、`f_dc_0..2`；支持 SH degree 0 或 3（后者另含 `f_rest_0..44`）。源坐标约定为 **−Y 向上、+X 向前、+Z 向右**。`opacity` 存 logit，`scale_*` 存 log scale。
 
-`--device` 必须带 CUDA index；SAM3D、gsplat 与 FPS 共用这一个明确设备。默认 seed 为 `22101`，允许 `0..65535`。GPT 接口不发送 seed，Nano Banana 重试使用该物体的 seed；SAM3D 与候选采样 seed 固定为 `42`。
+`--device` 必须带 CUDA index；SAM3D、gsplat 与 FPS 共用这一个明确设备。默认 seed 为 `22101`，允许 `0..65535`。GPT 接口不发送 seed，Nano Banana 两次尝试分别使用该物体的 seed 与 `(seed + 1) % 65536`；SAM3D 与候选采样 seed 固定为 `42`。
 
 测试配准时，可在上述命令末尾添加 `--bbox`。此时 `transform.json` 直接保存「完整逆变换 + bbox 修正」的最终矩阵，加载原始 `rodin.glb` 后应用一次即可。第一步几何生成不添加该参数，保持只做逆变换。
 
@@ -117,13 +117,13 @@ result/
 
 | 文件 | 内容 |
 |---|---|
-| `rodin.glb` | Rodin 下载的原始模型，字节不修改，保持 condition 坐标 |
-| `transform.json` | Rodin condition → 原高斯世界坐标的最终矩阵；默认完整逆变换，`--bbox` 时包含 bbox 修正 |
-| `fal_refine.png` | 通过高斯保留率检查的 GPT 或 Nano Banana 补全结果，2048×2048 四视图拼图；与过滤高斯及 Rodin 输入对应 |
+| `rodin.glb` | Rodin 下载的原始模型，字节不修改，保持生成坐标 |
+| `transform.json` | 有点云时保存完整逆变换及可选 bbox 修正；仅图像时标记 `imageOnly=true`、`alignment=canonical-frame-only`，只保存 canonical 坐标系粗放置矩阵，需后续配准 |
+| `fal_refine.png` | 最终采用的 GPT 或 Nano Banana 补全结果，2048×2048 四视图拼图；两次 Nano 均不达标时使用第一次 GPT Image 图片进行仅图像生成 |
 | `gaussian.png` | 属性预过滤后、前景过滤前的高斯渲染；也是 Fal 的精确输入，2048×2048 四视图拼图 |
-| `gaussian_filter.png` | 前景过滤后的高斯渲染；与 `gaussian.png` 使用完全相同的 frame、相机、分辨率与拼图顺序 |
+| `gaussian_filter.png` | 前景过滤后的高斯渲染；与原图共用相机；全部删空时输出白底空图 |
 | `rodin.png` | 原始 GLB 应用最终 `transform.json` 后的 Mesh 四视图；包含可选 bbox 修正，灰蓝色几何明暗显示，无材质 |
-| `gaussian_filter.ply` | 过滤后的高斯，保留原世界坐标及源 PLY 属性顺序 |
+| `gaussian_filter.ply` | 实际过滤后的高斯，保留原世界坐标及源 PLY 属性顺序；仅图像模式允许 0 点 |
 | `timing.json` | 各次执行尝试、逐阶段处理与排队耗时、缓存状态、其他开销与累计处理耗时，单位为秒 |
 
 四张图的四格顺序均为：左上 front、右上 right、左下 back、右下 left。每格 1024×1024，白背景，透视相机仰角 30°；各阶段使用同一组相机。图像接口和内存数据使用 RGB，OpenCV 编解码边界做颜色转换。
@@ -131,6 +131,8 @@ result/
 这些文件已足够后续使用原始模型和恢复矩阵，也足够独立浏览图片、耗时和 3D 对比。精确上传点云、canonical frame、请求状态及输入 hash 保存在独立的 `.work/<scene_id>/<object_id>/`，用于断点恢复和点击重跑，不属于交付输出；不导出对齐 GLB、诊断图或 pointmap。bbox 配准结果直接包含在 `transform.json` 中。清理工作目录后仍可查看结果，但不能从 viewer 重跑；重新生成需要新的结果目录。
 
 同一工作目录要求源文件内容、ID、seed、prompt、API 参数和 `--bbox` 开关一致；修改时使用新工作目录和输出目录。付费生成的 POST 不自动重试。提交前写入状态，若网络中断导致提交状态不确定，明确报错，需检查服务端任务后处理该工作目录；不会悄悄创建第二次付费任务。已有 request ID 的任务可以继续轮询、下载。工作目录锁防止同时处理同一物体。
+
+两次 Nano 仍不达标时，八文件结构不变，PLY 保留第二次 Nano 的实际过滤结果，允许为空；不写入 `condition.npz`，不伪造 FPS 或点云归一化矩阵。仅图像结果的 `transform.json` 额外记录 `imageOnly=true`、`alignment=canonical-frame-only` 和 `referenceObb`，`rodinToWorld` 使用原始 canonical→world 矩阵作粗放置，不保证图像生成模型的世界坐标尺度及位置准确；需要后续单独配准。即使传入测试参数 `--bbox`，该模式也明确跳过 bbox，因为没有有效 condition FPS。
 
 ## 通用结果 viewer
 
@@ -178,7 +180,7 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 1. **属性预过滤。** 去掉非有限记录、opacity `<0.01`、协方差 3σ 半径超过稳健物体对角线四倍，以及离主体极远的记录。各向异性只统计，不作为删除条件，保留桌面等扁平高斯。
 2. **朝向。** 在水平面求稳健最小面积 OBB，按源坐标约定锚定轴向。从方位角 `0/72/144/216/288°`、仰角 `30°` 渲染五张 512×512 图；每视角用 SAM3D stage1 coarse（10 steps、seed 42）投一票，选水平 quarter turn。平票按 coarse / Gaussian 体素的 Chamfer 最小值决定。体素仅参与朝向判断，不上传 Rodin。保存 canonical→world 矩阵 **P**。
 3. **四视图与 Fal。** 按确定的 canonical 朝向渲染四视图，拼成 2×2 图，请求下面列出的 Fal 模型。通用 prompt 完整保存在 `fal_prompt.txt`：清理扫描杂质、补全缺失，保持物体身份、数量、真实结构、材质和各格相机投影一致，不添加文字或边框。
-4. **前景与高斯过滤。** Fal 每格同时运行 U2Net 320×320 和 ISNet 1024×1024，取前景概率逐像素最大值。使用 `alpha >= 0.25`，二值膨胀 4 次。将高斯中心投影到四张图，**任意一个有效投影在 mask 外即删除**；相机背后或图像外的无效投影不投票。以属性预过滤后的高斯数为分母，GPT 过滤后保留不足 30%（删除超过 70%，包括全部删除）时，明确记录并换 `google/nano-banana-2.1/edit` 重试一次。重试使用原始 `gaussian.png`、相同的当前默认 prompt、原始待过滤高斯和相机；不对 GPT 结果二次编辑或继续裁减。Nano 也必须保留至少 30%，否则明确失败，不提交 Rodin。不使用 IoU 门槛、连通域清理或回滚，保留记录不移动。工作目录 `foreground_filter.json` 保存两次的数量、保留率、request ID 和选择结果；`fal_gpt/`、`fal_nano/` 分别保存图片和请求日志，续跑复用原请求。
+4. **前景与高斯过滤。** Fal 每格同时运行 U2Net 320×320 和 ISNet 1024×1024，取前景概率逐像素最大值。使用 `alpha >= 0.25`，二值膨胀 4 次。将高斯中心投影到四张图，**任意一个有效投影在 mask 外即删除**；相机背后或图像外的无效投影不投票。以属性预过滤后的高斯数为分母，GPT 过滤后保留不足 30%（删除超过 70%，包括全部删除）时，明确记录并换 `google/nano-banana-2.1/edit` 最多尝试两次，使用 seed 和 `(seed + 1) % 65536`。重试使用原始 `gaussian.png`、相同的当前默认 prompt、原始待过滤高斯和相机；不对 GPT 结果二次编辑或继续裁减。Nano 任一次保留至少 30% 即采用对应点云；两次均低于 30%（包括全部删空）时，采用第一次 GPT Image 的四视图，只上传图片，省略全部点云 condition 字段，跳过 FPS、点云归一化与 bbox。工作目录 `image-only.json` 明确记录该模式与原因。不使用 IoU 门槛、连通域清理或回滚，保留记录不移动。工作目录 `foreground_filter.json` 保存最多三次的数量、保留率、seed、request ID 和选择结果；`fal_gpt/`、`fal_nano/`、`fal_nano_2/` 分别保存图片和请求日志，续跑复用原请求。
 5. **采样。** 从过滤后 opacity `>0.2` 的高斯随机等概率选择 65,536 次，在各自 `opacity × exp(-0.5 × Mahalanobis²) >= 0.2` 椭球体积内采样。seed 42。转到 canonical 坐标，保留 XYZ 绝对值均 `<0.98` 的候选，使用确定性 greedy GPU FPS（固定首点）取 4096 点。这是体积点，可能含内部点。
 6. **独立点云归一化。** 根据实际 4096 点自己的 AABB 中心 `c` 和最长边 `L`，计算 `condition=(canonical−c)×1.96/L`，保存 canonical→condition 矩阵 **N**。只做等比缩放和中心平移；最长轴范围 `[-0.98,0.98]`，其他轴保持比例。不能以高斯渲染归一化代替这一步。
 7. **Rodin。** 上传 Fal 四张图和这批归一化的 4096×3 点，下载原始 GLB。模型参数固定如下。
@@ -212,7 +214,7 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 
 提交 HTTP 超时 180 秒，状态 GET 超时 60 秒，每 5 秒轮询，单次等待最多 60 分钟；可续跑已有任务。
 
-仅当 GPT 高斯保留率不足 30% 时，使用 `POST https://queue.fal.run/google/nano-banana-2.1/edit` 重试一次：`num_images=1`、`aspect_ratio=1:1`、`resolution=2K`、`output_format=png`、`thinking_level=high`、`seed` 为该物体的 manifest/命令行 seed；prompt 和输入图片与 GPT 完全相同。两次请求各有独立日志，最终仅将通过检查的图片和对应过滤高斯用于后续流程。当前已有 34 个结果中，叉子删除 99.70%、餐刀删除 88.73%，其他物体最高删除 47.31%，因此 70% 阈值只会标记这两个已有异常案例；重新生成后的触发情况由新结果决定。
+仅当 GPT 高斯保留率不足 30% 时，使用 `POST https://queue.fal.run/google/nano-banana-2.1/edit` 最多尝试两次：`num_images=1`、`aspect_ratio=1:1`、`resolution=2K`、`output_format=png`、`thinking_level=high`、两次 `seed` 分别为该物体的 manifest/命令行 seed 与 `(seed + 1) % 65536`；prompt 和输入图片与 GPT 完全相同。每次请求各有独立日志。任一次通过保留率检查即使用对应图片和点云；两次 Nano 均不达标时，只使用第一次 GPT Image 的图片，不发送点云 condition。当前已有 34 个结果中，叉子删除 99.70%、餐刀删除 88.73%，其他物体最高删除 47.31%，因此 70% 阈值只会标记这两个已有异常案例；重新生成后的触发情况由新结果决定。
 
 ## Rodin 完整参数
 
@@ -229,9 +231,9 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 | `material` | 字符串 `None` |
 | `use_original_alpha` | 字符串 `true` |
 | `is_symmetric` | `unknown` |
-| `pcd_condition_cfg` | 字符串 `true` |
-| `pcd_condition_weight` | `0.3` |
-| `pcd_condition` | 实际归一化后的 `4096×3` XYZ JSON 列表 |
+| `pcd_condition_cfg` | 有点云时发送字符串 `true`；仅图像时省略 |
+| `pcd_condition_weight` | 有点云时发送 `0.3`；仅图像时省略 |
+| `pcd_condition` | 有点云时发送实际归一化后的 `4096×3` XYZ JSON 列表；仅图像时省略 |
 | `seed` | 单物体 `--seed`，默认 22101；批量 manifest 每行的 `seed` |
 
 `image_label` 按 Rodin 物体局部方向定义；图中右上是相机位于 +X 的一侧，对应标签 L，右下相机位于 −X，对应 R。不交换图片，也不将标签改成 F/R/B/L。不发送内部服务的 `normalize`、`point_count`、`pcd_tokens`、`cfg`、`steps` 或 `cutoff` 参数。

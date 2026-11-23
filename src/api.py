@@ -84,16 +84,19 @@ class GenerationAPI:
         temporary.replace(target)
         return target
 
-    def rodin(self, images: list[np.ndarray], points: np.ndarray, seed: int, work: Path) -> Path:
-        """Four RGB uint8 [1024,1024,3] images, condition XYZ float32 [4096,3] -> raw GLB path."""
-        assert len(images) == 4 and points.shape == (4096, 3) and np.isfinite(points).all()
+    def rodin(self, images: list[np.ndarray], points: np.ndarray | None, seed: int, work: Path) -> Path:
+        """Four RGB uint8 [1024,1024,3] images, condition XYZ float32 [4096,3] or None -> raw GLB path."""
+        assert len(images) == 4
+        assert points is None or (points.shape == (4096, 3) and np.isfinite(points).all())
         assert 0 <= seed < 65536
         encoded = [png_bytes(image) for image in images]
-        condition = json.dumps(points.tolist(), separators=(',', ':'), allow_nan=False)
+        condition = None if points is None else json.dumps(points.tolist(), separators=(',', ':'), allow_nan=False)
         settings = dict(RODIN_SETTINGS, seed=seed)
+        if points is None:
+            del settings['pcd_condition_cfg'], settings['pcd_condition_weight']
         request = dict(api=RODIN_API, settings=settings,
                        imageSha256=[hashlib.sha256(body).hexdigest() for body in encoded],
-                       conditionSha256=hashlib.sha256(condition.encode()).hexdigest())
+                       conditionSha256=None if condition is None else hashlib.sha256(condition.encode()).hexdigest())
         headers = {'Authorization': 'Bearer ' + self.rodin_key}
         journal = work / 'rodin-request.json'
         target = work / 'rodin.glb'
@@ -105,7 +108,8 @@ class GenerationAPI:
             state = dict(status='submitting', request=request)
             write_json(journal, state)
             form = [(key, json.dumps(value) if isinstance(value, list) else str(value)) for key, value in settings.items()]
-            form.append(('pcd_condition', condition))
+            if condition is not None:
+                form.append(('pcd_condition', condition))
             response = self.session.post(RODIN_API + '/rodin', headers=headers, data=form,
                 files=[('images', (f'image-{i + 1}.png', body, 'image/png')) for i, body in enumerate(encoded)], timeout=600)
             response.raise_for_status()

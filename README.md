@@ -20,7 +20,7 @@ Gaussian PLY
 
 Fal 默认使用 `openai/gpt-image-2.6/sunburst/edit`，prompt 为 [src/fal_prompt.txt](src/fal_prompt.txt)，与当前用户修订版 [V1 英文](prompts/fal_v1.en.txt) 一致，[中文对照](prompts/fal_v1.zh.txt) 用于阅读和修订。
 
-以属性预过滤后的高斯数量为基准，如果 GPT 输出导致高斯删除超过 70%，自动改用 `google/nano-banana-2.1/edit` 重试一次。重试使用相同原始输入图、prompt 和相机，seed 使用该物体的 seed；若仍保留不足 30%，明确失败，不提交 Rodin。
+以属性预过滤后的高斯数量为基准，如果 GPT 输出导致高斯删除超过 70%，自动改用 `google/nano-banana-2.1/edit` 最多尝试两次。两次均使用相同原始输入图、prompt 和相机，seed 分别为该物体的 seed 与 `(seed + 1) % 65536`；任一次保留至少 30% 即使用对应点云继续。两次 Nano 均保留不足 30%（包括全部删空）时，使用第一次 GPT Image 的四视图继续生成 Rodin，仅上传图片，省略 `pcd_condition`、`pcd_condition_cfg`、`pcd_condition_weight`，跳过 FPS、点云归一化和测试用 bbox 配准。选择结果与原因保存在工作目录日志中。
 
 ## 环境与配置
 
@@ -87,18 +87,18 @@ result/
 
 | 文件 | 内容 |
 |---|---|
-| `rodin.glb` | Rodin 返回的原始几何模型，保持生成时的 condition 坐标，尚未烘焙世界坐标变换 |
-| `transform.json` | `rodinToWorld` 完整逆变换，将模型恢复到原始高斯的世界坐标；默认不包含测试用 bbox 修正 |
+| `rodin.glb` | Rodin 返回的原始几何模型，保持生成坐标，尚未烘焙世界坐标变换 |
+| `transform.json` | 有点云时保存 `rodinToWorld` 完整逆变换；仅图像模式保存 canonical 坐标系的粗放置矩阵，并标记 `imageOnly=true`、`alignment=canonical-frame-only`，需要后续配准 |
 | `gaussian.png` | 前景过滤前的高斯四视图，也是 Fal 的原始输入 |
 | `fal_refine.png` | 最终采用的 GPT 或 Nano Banana 补全四视图 |
-| `gaussian_filter.ply` | 过滤后的高斯，保留原世界坐标和源属性 |
-| `gaussian_filter.png` | 过滤高斯四视图，与原图共用相机 |
-| `rodin.png` | 原始模型应用完整逆变换后的四视图，无材质 |
+| `gaussian_filter.ply` | 实际过滤后的高斯，保留原世界坐标和源属性；仅图像模式保存第二次 Nano 的过滤结果，可能为 0 点 |
+| `gaussian_filter.png` | 过滤高斯四视图，与原图共用相机；0 点时为空白白底图 |
+| `rodin.png` | 原始模型应用保存矩阵后的四视图，无材质；仅图像模式的放置不代表精确配准 |
 | `timing.json` | 各阶段处理耗时、排队及缓存记录 |
 
-四视图拼图为 2048×2048，顺序是左上 front、右上 right、左下 back、右下 left。`transform.json` 中矩阵按 column-major 存储，加载 `rodin.glb` 后应用一次即可；不要重复归一化或重复应用逆变换。
+四视图拼图为 2048×2048，顺序是左上 front、右上 right、左下 back、右下 left。`transform.json` 中矩阵按 column-major 存储，加载 `rodin.glb` 后应用一次即可；不要重复归一化或重复应用逆变换。仅图像模式没有点云条件约束，保存矩阵仅用于按原始 canonical 坐标系粗放置，不保证生成模型的世界坐标尺度和位置准确。
 
-工作缓存保存在 **`.work/scene_001/object_001/`**，包含朝向、实际上传点云、请求日志和高斯保留率记录，用于断点续跑和后续配准。相同命令可继续已有请求；更改输入、prompt、seed 或参数时应使用新的工作目录与结果目录。
+工作缓存保存在 **`.work/scene_001/object_001/`**，包含朝向、实际上传点云（有点云模式）、请求日志和高斯保留率记录，用于断点续跑和后续配准。仅图像模式另存 `image-only.json`，不生成 `condition.npz`。相同命令可继续已有请求；更改输入、prompt、seed 或参数时应使用新的工作目录与结果目录。
 
 ## 代码目录与后续配准
 

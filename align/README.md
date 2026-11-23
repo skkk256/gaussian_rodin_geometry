@@ -2,6 +2,8 @@
 
 本目录为后续配准保留的独立模块，当前第一步几何生成暂不接入，也不需要执行本目录命令。几何入口中的 `--bbox` 是测试用配准参数，第一步几何生成同样暂时不用。
 
+本模块要求生成时存在有效点云 condition 和对应 FPS 记录。`transform.json` 标记 `imageOnly=true` 的仅图像结果没有这些记录，不能直接使用本模块的现有 FPS 配准流程。
+
 独立执行已有流程：**完整逆变换 → 过滤高斯 FPS bbox → 八视角 DINOv3 / SIFT**。只优化等比缩放和平移，固定旋转；不调用生成或材质 API。
 
 `transform.json` 按未包含 bbox / DINO 的完整逆变换读取。`rodin_textured.glb` 必须保持 Rodin condition 坐标，不能提前应用该矩阵。原始生成结果不被改写。

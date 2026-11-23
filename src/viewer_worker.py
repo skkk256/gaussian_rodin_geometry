@@ -23,7 +23,8 @@ def main() -> None:
     work.mkdir(parents=True, exist_ok=True)
     reuse = ['canonical.json', 'gaussian.png']
     if request['mode'] == 'rodin':
-        reuse += ['fal_refine.png', 'fal-request.json', 'gaussian_filter.ply', 'gaussian_filter.png', 'condition.npz']
+        reuse += ['fal_refine.png', 'fal-request.json', 'gaussian_filter.ply', 'gaussian_filter.png']
+        reuse += ['image-only.json'] if (parent / 'image-only.json').is_file() else ['condition.npz']
     for name in reuse:
         assert (parent / name).is_file(), f'Missing reusable cache: {name}'
         shutil.copyfile(parent / name, work / name)

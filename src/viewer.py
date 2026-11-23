@@ -133,9 +133,14 @@ class Handler(SimpleHTTPRequestHandler):
                 _, _, version, scene, obj = parts
                 folder, _ = self.results.selected(scene, obj, version)
                 from gaussian import compute_semantic_obb, read_ply
-                obb = compute_semantic_obb(read_ply(folder / 'gaussian_filter.ply')['xyz'])
+                xyz = read_ply(folder / 'gaussian_filter.ply')['xyz']
                 transform = json.loads((folder / 'transform.json').read_text())
-                self.json(dict(obb=obb, canonicalToWorld=transform['rodinToWorld']['matrix']))
+                if len(xyz) == 0:
+                    assert transform['imageOnly']
+                    obb = transform['referenceObb']
+                else:
+                    obb = compute_semantic_obb(xyz)
+                self.json(dict(obb=obb, canonicalToWorld=transform['rodinToWorld']['matrix'], gaussianCount=len(xyz)))
             elif len(parts) == 4 and parts[0:2] == ['api', 'jobs'] and parts[3] == 'log':
                 assert parts[2] in self.results.jobs
                 folder = self.results.private / parts[2]

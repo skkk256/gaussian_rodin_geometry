@@ -16,6 +16,7 @@ async function main() {
   const base = `/result/${path}/`;
   $('title').textContent = `${scene} / ${object}`;
   const [frame, transform] = await Promise.all([json(`/api/frame/${path}`), json(base + 'transform.json')]);
+  if (transform.imageOnly) $('title').textContent += '（仅图像生成，待配准）';
   const rodinToWorld = new THREE.Matrix4().fromArray(transform.rodinToWorld.matrix);
   const worldToView = new THREE.Matrix4().fromArray(frame.canonicalToWorld).invert();
   const viewport = $('viewport');
@@ -31,10 +32,14 @@ async function main() {
   mScene.add(new THREE.HemisphereLight(0xffffff, 0x7b8390, 2));
   const light = new THREE.DirectionalLight(0xffffff, 2); light.position.set(3, 5, 4); mScene.add(light);
   const material = new THREE.MeshStandardMaterial({color:0x718fb5,roughness:.85,side:THREE.DoubleSide});
-  const splat = new SplatMesh({url:base + 'gaussian_filter.ply',fileName:'gaussian.ply'});
-  worldToView.decompose(splat.position, splat.quaternion, splat.scale);
+  const splat = frame.gaussianCount > 0 ? new SplatMesh({url:base + 'gaussian_filter.ply',fileName:'gaussian.ply'}) : null;
+  if (splat) worldToView.decompose(splat.position, splat.quaternion, splat.scale);
   const loader = new GLTFLoader();
-  const [gltf] = await Promise.all([loader.loadAsync(base + 'rodin.glb'), splat.initialized]);
+  const gltf = await loader.loadAsync(base + 'rodin.glb');
+  if (splat) {
+    await splat.initialized;
+    gScene.add(splat);
+  }
   const model = new THREE.Group();
   model.matrix.multiplyMatrices(worldToView, rodinToWorld); model.matrixAutoUpdate = false;
   model.add(gltf.scene);
@@ -44,7 +49,7 @@ async function main() {
       if (!node.geometry.attributes.normal) node.geometry.computeVertexNormals();
     }
   });
-  gScene.add(splat); mScene.add(model);
+  mScene.add(model);
   const camera = new THREE.PerspectiveCamera(35, 1, .001, 1000);
   const controls = new OrbitControls(camera, viewport); controls.enableDamping = true;
   const target = new THREE.Vector3(...frame.obb.center).applyMatrix4(worldToView);
@@ -66,8 +71,8 @@ async function main() {
     material.transparent = overlay; material.opacity = overlay ? .55 : 1.; material.needsUpdate = true;
   };
   view('0'); $('status').hidden = true;
-  window.viewerState = () => ({rodinToWorld:rodinToWorld.toArray(), gaussianMatrix:splat.matrix.toArray(),
-    modelMatrix:model.matrix.toArray(), displaySplats:splat.packedSplats.numSplats, layout:$('layout').value});
+  window.viewerState = () => ({rodinToWorld:rodinToWorld.toArray(), gaussianMatrix:splat ? splat.matrix.toArray() : null,
+    modelMatrix:model.matrix.toArray(), displaySplats:splat ? splat.packedSplats.numSplats : 0, layout:$('layout').value});
   gRenderer.setAnimationLoop(() => {
     const layout = $('layout').value, width = viewport.clientWidth, height = viewport.clientHeight;
     controls.update(); camera.updateMatrixWorld();
