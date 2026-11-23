@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gaussian → Rodin</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><div><h1>Gaussian → Rodin</h1><p id="summary">正在读取结果…</p></div><div><input id="search" type="search" placeholder="搜索场景 / 物体" aria-label="搜索"><button id="refresh">刷新</button></div></header>
+  <p id="error" role="alert" hidden></p>
+  <div id="jobs"></div>
+  <main id="objects"></main>
+  <template id="object-template">
+    <article>
+      <div class="heading"><div><small class="scene"></small><h2></h2></div><div class="actions"><select class="version" aria-label="结果版本"></select><a class="compare" target="_blank">打开 3D 对比 ↗</a><select class="mode" aria-label="重跑范围"><option value="rodin">仅重跑 Rodin</option><option value="full">重跑 Fal + Rodin</option></select><button class="retry">重新生成</button></div></div>
+      <div class="images"></div>
+      <div class="footer"><p class="downloads"></p><details><summary class="duration"></summary><div class="timing"></div></details></div>
+      <p class="object-error" role="alert" hidden></p>
+    </article>
+  </template>
+  <script type="module" src="/gallery.js"></script>
+</body>
+</html>

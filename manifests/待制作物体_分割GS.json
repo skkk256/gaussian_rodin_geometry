@@ -1,0 +1,206 @@
+[
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G013_书桌上的书",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G013_书桌上的书.ply",
+    "seed": 22101
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G014_灰色收纳盒",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G014_灰色收纳盒.ply",
+    "seed": 22102
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G022.1_紫色笔",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G022.1_紫色笔.ply",
+    "seed": 22103
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G022.2_橙色笔",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G022.2_橙色笔.ply",
+    "seed": 22104
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G022.3_粉色笔",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G022.3_粉色笔.ply",
+    "seed": 22105
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G022.4_黄色笔",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G022.4_黄色笔.ply",
+    "seed": 22106
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G027_绿色餐垫",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G027_绿色餐垫.ply",
+    "seed": 22107
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G028.1_蓝盘旁叉子",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G028.1_蓝盘旁叉子.ply",
+    "seed": 22108
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G029.1_蓝盘旁餐刀",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G029.1_蓝盘旁餐刀.ply",
+    "seed": 22109
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G032_垃圾桶",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G032_垃圾桶.ply",
+    "seed": 22110
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G033_红饮料罐",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G033_红饮料罐.ply",
+    "seed": 22111
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G034_银饮料罐",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G034_银饮料罐.ply",
+    "seed": 22112
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G037_杯架红杯",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G037_杯架红杯.ply",
+    "seed": 22113
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G040_灰盒盖",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G040_灰盒盖.ply",
+    "seed": 22114
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G042_衣架",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G042_衣架.ply",
+    "seed": 22115
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G044_吐司模型",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G044_吐司模型.ply",
+    "seed": 22116
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G047_厨房夹",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G047_厨房夹.ply",
+    "seed": 22117
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G055_桌面刷",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G055_桌面刷.ply",
+    "seed": 22118
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G056_簸箕",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G056_簸箕.ply",
+    "seed": 22119
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G057.1_纸团1",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G057.1_纸团1.ply",
+    "seed": 22120
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G057.2_纸团2",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G057.2_纸团2.ply",
+    "seed": 22121
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G057.3_纸团3",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G057.3_纸团3.ply",
+    "seed": 22122
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G058_剪刀_原GS可见部分",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G058_剪刀_原GS可见部分.ply",
+    "seed": 22123
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G062_适配器",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G062_适配器.ply",
+    "seed": 22124
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G063_插线板与电源线整体",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G063_插线板与电源线整体.ply",
+    "seed": 22125
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G064_手机",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G064_手机.ply",
+    "seed": 22126
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G065_灰色灯泡收纳盒",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G065_灰色灯泡收纳盒.ply",
+    "seed": 22127
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G066_白色螺口灯泡",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G066_白色螺口灯泡.ply",
+    "seed": 22128
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G071_床架",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G071_床架.ply",
+    "seed": 22129
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G073_枕头",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G073_枕头.ply",
+    "seed": 22130
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G075.1_蓝色无柄杯",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G075.1_蓝色无柄杯.ply",
+    "seed": 22131
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G075.2_粉色无柄杯",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G075.2_粉色无柄杯.ply",
+    "seed": 22132
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G076_黑色小盘",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G076_黑色小盘.ply",
+    "seed": 22133
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G077_圆地毯",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G077_圆地毯.ply",
+    "seed": 22134
+  }
+]

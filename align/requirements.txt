@@ -1,0 +1,3 @@
+-r ../requirements.txt
+nvdiffrast==0.4.0
+transformers==5.2.0

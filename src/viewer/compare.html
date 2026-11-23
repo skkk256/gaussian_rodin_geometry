@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,">
+<title>高斯 / Rodin 对比</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fff;font:14px system-ui;color:#26354a}#viewport{position:absolute;inset:70px 0 0;touch-action:none}canvas{position:absolute;top:0;height:100%;display:block}header{height:70px;padding:12px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid #dce3ef}button,select{font:inherit;padding:6px 9px;background:#fff;border:1px solid #cad3e0;border-radius:5px}button{cursor:pointer}a{color:#315fb2}#status{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);padding:20px;background:#fff;border:1px solid #bfcbdc;border-radius:8px;white-space:pre-wrap;z-index:3}#help{position:absolute;bottom:12px;left:12px;right:12px;text-align:center;color:#596b83;font-size:12px;pointer-events:none}@media(max-width:800px){header{height:130px}#viewport{top:130px}}
+</style>
+<script type="importmap">{"imports":{"three":"/vendor/three/build/three.module.js","three/addons/":"/vendor/three/examples/jsm/","@sparkjsdev/spark":"/vendor/spark/dist/spark.module.js"}}</script>
+</head>
+<body>
+<header><a href="/">← 结果</a><strong id="title"></strong><select id="layout" aria-label="对比方式"><option value="side">左：过滤高斯 / 右：Rodin</option><option value="overlay">叠加对比</option><option value="gaussian">仅高斯</option><option value="model">仅 Rodin</option></select><div id="views"><button data-view="0">前</button><button data-view="90">右</button><button data-view="180">后</button><button data-view="270">左</button><button data-view="top">顶</button></div></header>
+<div id="viewport"><canvas id="gaussian"></canvas><canvas id="model"></canvas></div>
+<div id="status">加载中…</div><div id="help">拖动旋转 · 右键平移 · 滚轮缩放 · 模型已应用最终 transform</div>
+<script type="module" src="/compare.js"></script>
+</body>
+</html>

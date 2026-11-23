@@ -1,0 +1,15 @@
+/ckpt/
+/.env
+/.env.*
+!/.env.template
+/.work*/
+/output*/
+/result*/
+/.viewer/
+/data/
+/temp/
+/align/output/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
