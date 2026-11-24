@@ -5,6 +5,8 @@ import numpy as np
 import onnxruntime as ort
 from scipy import ndimage
 
+from views import VIEW_SIZE
+
 
 class ForegroundSegmenter:
     def __init__(self, model: Path, detail_model: Path):
@@ -35,20 +37,22 @@ class ForegroundSegmenter:
         return cv2.resize(prediction, (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_LINEAR).clip(0, 1)
 
     def predict_detail(self, rgb: np.ndarray) -> np.ndarray:
-        """RGB uint8 [1024,1024,3] -> foreground probability float32 [1024,1024], using IS-Net."""
-        assert rgb.dtype == np.uint8 and rgb.shape == (1024, 1024, 3)
-        normalized = rgb.astype(np.float32) / max(float(rgb.max()), 1e-6) - .5
+        """RGB uint8 [512,512,3] -> foreground probability float32 [512,512], using IS-Net at its native 1024 resolution."""
+        assert rgb.dtype == np.uint8 and rgb.shape == (VIEW_SIZE, VIEW_SIZE, 3)
+        resized = cv2.resize(rgb, (1024, 1024), interpolation=cv2.INTER_LINEAR).astype(np.float32)
+        normalized = resized / max(float(resized.max()), 1e-6) - .5
         tensor = np.ascontiguousarray(normalized.transpose(2, 0, 1)[None])
         prediction = self.detail_session.run(None, {self.detail_input_name: tensor})[0][0, 0]
         assert np.isfinite(prediction).all() and np.ptp(prediction) > 1e-6
-        return ((prediction - prediction.min()) / np.ptp(prediction)).clip(0, 1)
+        prediction = ((prediction - prediction.min()) / np.ptp(prediction)).clip(0, 1)
+        return cv2.resize(prediction, (VIEW_SIZE, VIEW_SIZE), interpolation=cv2.INTER_LINEAR)
 
     def multiview(self, views: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Four RGB uint8 [1024,1024,3] views -> float32 union alpha, bool masks [4,H,W], float32 model alpha [2,4,H,W]."""
-        assert len(views) == 4 and all(view.shape == (1024, 1024, 3) for view in views)
+        """Four RGB uint8 [512,512,3] side views -> float32 union alpha [4,H,W], bool masks [4,H,W], float32 model alpha [2,4,H,W]."""
+        assert len(views) == 4 and all(view.shape == (VIEW_SIZE, VIEW_SIZE, 3) for view in views)
         model_alpha = np.stack(([self.predict(view) for view in views],
                                 [self.predict_detail(view) for view in views]))
         alpha = model_alpha.max(axis=0)
-        masks = np.stack([ndimage.binary_dilation(a >= .5, iterations=3) for a in alpha])
+        masks = np.stack([ndimage.binary_dilation(a >= .5, iterations=2) for a in alpha])
         assert masks.reshape(4, -1).any(axis=1).all(), 'Foreground segmentation returned an empty view'
         return alpha, masks, model_alpha

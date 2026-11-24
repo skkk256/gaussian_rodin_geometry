@@ -1,10 +1,10 @@
 const $ = id => document.getElementById(id);
 const names = {
   pipeline_initialization:'管线初始化', read_and_prefilter:'读取 / 属性预过滤', sam3d_orientation:'SAM3D 五视角朝向',
-  gaussian_render:'原高斯四视图', fal_refine:'Fal 提交 / 等待 / 下载', foreground_filter:'前景分割 / 过滤',
-  filtered_gaussian_render:'过滤后高斯四视图', sampling_fps_normalization:'体积采样 / FPS / 归一化',
+  gaussian_render:'原高斯六视图', fal_refine:'Fal 提交 / 等待 / 下载', foreground_filter:'前景分割 / 过滤',
+  filtered_gaussian_render:'过滤后高斯六视图', sampling_fps_normalization:'体积采样 / FPS / 归一化',
   inverse_transform:'完整逆变换 / 校验', rodin_generate:'Rodin 提交 / 等待 / 下载',
-  bbox_registration:'bbox 配准', write_transform:'保存最终变换', export:'结果导出', mesh_render:'对齐后 Mesh 四视图',
+  bbox_registration:'bbox 配准', write_transform:'保存最终变换', export:'结果导出', mesh_render:'对齐后 Mesh 六视图',
   preprocess_sam3d:'前处理 + SAM3D 投票', fal:'Fal + 前景过滤 / 点云准备', rodin:'Rodin 生成', postprocess:'后处理',
   fal_nano_retry:'Nano Banana 重试 / 等待 / 下载', foreground_filter_nano:'Nano 前景分割 / 过滤',
   wait_gpu:'等待 GPU（不计处理耗时）', wait_segmentation:'等待前景分割器（不计处理耗时）'
@@ -50,7 +50,7 @@ function showTiming(article, data) {
     container.append(label, table);
   }
 }
-async function loadVersion(article, item) {
+function loadVersion(article, item) {
   const version = article.querySelector('.version').value;
   const path = [version, item.scene_id, item.object_id].map(encodeURIComponent).join('/');
   const base = `/result/${path}/`;
@@ -60,44 +60,61 @@ async function loadVersion(article, item) {
     const figure = document.createElement('figure'), caption = document.createElement('figcaption');
     caption.textContent = label;
     const link = document.createElement('a'); link.href = base + name; link.target = '_blank';
-    const image = document.createElement('img'); image.src = base + name; image.alt = label; image.loading = 'lazy';
+    const image = document.createElement('img'); image.src = `/preview/${path}/${name.replace('.png', '.webp')}?v=${item.previewRevision}`;
+    image.alt = label; image.loading = 'lazy'; image.decoding = 'async'; image.width = 768;
     link.append(image); figure.append(caption, link); images.append(figure);
   }
   const downloads = article.querySelector('.downloads'); downloads.replaceChildren();
   for (const [name, label] of [['rodin.glb','原始 Rodin'],['transform.json','最终变换'],['gaussian_filter.ply','过滤后高斯 PLY'],['timing.json','耗时 JSON']]) {
     const link = document.createElement('a'); link.href = base + name; link.textContent = label; downloads.append(link);
   }
-  showTiming(article, await read(base + 'timing.json'));
+  const details = article.querySelector('details');
+  details.open = false;
+  article.querySelector('.duration').textContent = '查看处理耗时';
+  article.querySelector('.timing').replaceChildren();
+  details.ontoggle = async () => {
+    if (!details.open) return;
+    details.ontoggle = null;
+    try {
+      const data = await read(base + 'timing.json');
+      if (article.querySelector('.version').value === version) showTiming(article, data);
+    } catch (error) {
+      article.querySelector('.duration').textContent = `读取耗时失败：${error.message}`;
+    }
+  };
 }
-async function refresh() {
-  catalog = await read('/api/objects');
-  $('summary').textContent = `${catalog.objects.length} 个物体 · 原始模型 + 最终变换`;
-  $('objects').replaceChildren();
-  for (const item of catalog.objects) {
-    const article = $('object-template').content.firstElementChild.cloneNode(true);
-    article.dataset.search = `${item.scene_id}/${item.object_id}`.toLowerCase();
-    article.querySelector('.scene').textContent = item.scene_id;
-    article.querySelector('h2').textContent = item.object_id;
-    const version = article.querySelector('.version');
-    item.versions.forEach(v => version.add(new Option(v.label, v.id)));
-    version.value = item.versions.at(-1).id;
-    const report = error => { const node = article.querySelector('.object-error'); node.hidden = false; node.textContent = error.message; };
-    version.onchange = () => loadVersion(article, item).catch(report);
-    const button = article.querySelector('.retry'); button.disabled = !item.canRetry;
-    button.title = item.canRetry ? '提交一次新的生成请求，保留首次结果' : '重跑需要原工作目录和凭据文件';
-    button.onclick = async () => {
-      button.disabled = true;
-      try {
-        await read('/api/retry', {method:'POST', headers:{'Content-Type':'application/json','X-Retry-Token':catalog.token},
-          body:JSON.stringify({scene_id:item.scene_id,object_id:item.object_id,version:version.value,mode:article.querySelector('.mode').value})});
-        await refreshJobs();
-      } catch (error) { report(error); }
-      finally { button.disabled = false; }
-    };
-    $('objects').append(article);
-    await loadVersion(article, item).catch(report);
-  }
-  search(); showJobs(catalog.jobs); $('error').hidden = true;
+async function refresh(rescan = false) {
+  $('refresh').disabled = true;
+  try {
+    catalog = await read(rescan ? '/api/objects?refresh=1' : '/api/objects');
+    $('summary').textContent = `${catalog.objects.length} 个物体 · 原始模型 + 最终变换`;
+    $('objects').replaceChildren();
+    for (const item of catalog.objects) {
+      const article = $('object-template').content.firstElementChild.cloneNode(true);
+      article.dataset.search = `${item.scene_id}/${item.object_id}`.toLowerCase();
+      article.querySelector('.scene').textContent = item.scene_id;
+      article.querySelector('h2').textContent = item.object_id;
+      const version = article.querySelector('.version');
+      item.versions.forEach(v => version.add(new Option(v.label, v.id)));
+      version.value = item.versions.at(-1).id;
+      const report = error => { const node = article.querySelector('.object-error'); node.hidden = false; node.textContent = error.message; };
+      version.onchange = () => loadVersion(article, item);
+      const button = article.querySelector('.retry'); button.disabled = !item.canRetry;
+      button.title = item.canRetry ? '提交一次新的生成请求，保留首次结果' : '重跑需要原工作目录和凭据文件';
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          await read('/api/retry', {method:'POST', headers:{'Content-Type':'application/json','X-Retry-Token':catalog.token},
+            body:JSON.stringify({scene_id:item.scene_id,object_id:item.object_id,version:version.value,mode:article.querySelector('.mode').value})});
+          await refreshJobs();
+        } catch (error) { report(error); }
+        finally { button.disabled = false; }
+      };
+      $('objects').append(article);
+      loadVersion(article, item);
+    }
+    search(); showJobs(catalog.jobs); $('error').hidden = true;
+  } finally { $('refresh').disabled = false; }
 }
 function showJobs(jobs) {
   $('jobs').replaceChildren();
@@ -116,6 +133,5 @@ async function refreshJobs() {
 function search() { for (const node of $('objects').children) node.hidden = !node.dataset.search.includes($('search').value.toLowerCase()); }
 function fail(error) { $('error').hidden = false; $('error').textContent = error.message; }
 $('search').oninput = search;
-$('refresh').onclick = () => refresh().catch(fail);
+$('refresh').onclick = () => refresh(true).catch(fail);
 refresh().catch(fail);
-setInterval(() => refreshJobs().catch(fail), 5000);

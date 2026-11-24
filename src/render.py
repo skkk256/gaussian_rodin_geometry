@@ -3,20 +3,18 @@ from math import isqrt
 import numpy as np
 import torch
 
-FOUR_ANGLES = np.deg2rad([0., 90., 180., 270.])
-FIVE_ANGLES = np.deg2rad([0., 72., 144., 216., 288.])
-
 
 def camera_matrices(obb: dict, scale: float, angles: np.ndarray, resolution: int) -> tuple[np.ndarray, np.ndarray]:
-    """angles: float64 [V]; return OpenCV world-to-camera float32 [V,4,4], intrinsics float32 [V,3,3]."""
+    """Azimuth/elevation angles float64 [V,2] -> OpenCV world-to-camera float32 [V,4,4], intrinsics float32 [V,3,3]."""
     axes = np.asarray(obb['axes'], dtype=np.float64)
     center = np.asarray(obb['center'], dtype=np.float64)
     assert np.allclose(axes @ axes.T, np.eye(3), atol=1e-6) and np.linalg.det(axes) > 0
-    height, distance = 2.5 * np.sin(np.deg2rad(30.)), 2.5 * np.cos(np.deg2rad(30.))
-    eyes = np.stack([distance * np.sin(angles), np.full_like(angles, height), distance * np.cos(angles)], axis=1)
+    assert angles.ndim == 2 and angles.shape[1] == 2
+    azimuth, elevation = angles.T
+    distance = 2.5 * np.cos(elevation)
+    eyes = np.stack([distance * np.sin(azimuth), 2.5 * np.sin(elevation), distance * np.cos(azimuth)], axis=1)
     forward = -eyes / np.linalg.norm(eyes, axis=1, keepdims=True)
-    right = np.cross(forward, [0., 1., 0.])
-    right /= np.linalg.norm(right, axis=1, keepdims=True)
+    right = np.stack([np.cos(azimuth), np.zeros_like(azimuth), -np.sin(azimuth)], axis=1)
     down = -np.cross(right, forward)
     rotations = np.stack((right, down, forward), axis=1) @ axes
     world_eyes = center + eyes @ axes / scale
@@ -35,7 +33,7 @@ class GaussianRenderer:
         self.warmed = set()
 
     def render(self, data: dict, frame: dict, angles: np.ndarray, resolution: int) -> np.ndarray:
-        """Gaussian float64 arrays [N,...], angles float64 [V] -> RGB uint8 [V,resolution,resolution,3]."""
+        """Gaussian float64 arrays [N,...], angles float64 [V,2] -> RGB uint8 [V,resolution,resolution,3]."""
         matrices, intrinsics = camera_matrices(frame['obb'], frame['normalizationScale'], angles, resolution)
         records = data['records']
         dc = np.column_stack([records[f'f_dc_{i}'] for i in range(3)])[:, None, :]

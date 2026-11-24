@@ -23,14 +23,15 @@ import numpy as np
 from dotenv import load_dotenv
 import torch
 
-from api import FAL_MODEL, FAL_SETTINGS, NANO_MODEL, NANO_SETTINGS, RODIN_SETTINGS, GenerationAPI
+from api import FAL_MODEL, FAL_SETTINGS, NANO_MODEL, NANO_SETTINGS, RODIN_SETTINGS, RODIN_VIEW_INDICES, GenerationAPI
 from bbox import register_bbox
 from conditions import PointSampler, filter_foreground, normalize_points
 from foreground import ForegroundSegmenter
 from gaussian import compute_semantic_obb, covariance_prefilter, read_ply, write_ply
 from io_utils import OUTPUT_FILES, join_views, read_rgb, sha256, split_views, validate_glb, write_json, write_rgb
 from orientation import Orientation
-from render import FOUR_ANGLES, GaussianRenderer
+from render import GaussianRenderer
+from views import SIX_ANGLES, VIEW_SIZE
 from timing import Timing
 from mesh_render import MeshRenderer
 from resources import Resource
@@ -98,8 +99,10 @@ class Pipeline:
         lock = (work / 'run.lock').open('a')
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            config = dict(version=1, source=str(job.source.resolve()), sourceSha256=sha256(job.source),
+            config = dict(version=3, source=str(job.source.resolve()), sourceSha256=sha256(job.source),
                           sceneId=job.scene_id, objectId=job.object_id, seed=job.seed,
+                          views=dict(anglesRadians=SIX_ANGLES.tolist(), size=VIEW_SIZE,
+                                     filterIndices=[0, 1, 2, 3], rodinIndices=list(RODIN_VIEW_INDICES)),
                           fal=dict(model=FAL_MODEL, settings=FAL_SETTINGS, prompt=self.prompt,
                                    retry=dict(model=NANO_MODEL, settings=dict(NANO_SETTINGS, seed=job.seed),
                                               minimumRetainedFraction=MIN_FOREGROUND_RETAINED_FRACTION)),
@@ -153,7 +156,7 @@ class Pipeline:
         work, timing = task.work, task.timing
         with timing.stage('read_and_prefilter'):
             data, _ = covariance_prefilter(read_ply(task.job.source))
-        self.phase(task, 'SAM3D five-view orientation and Gaussian four-view render')
+        self.phase(task, 'SAM3D five-view orientation and Gaussian six-view render')
         frame_path = work / 'canonical.json'
         gaussian_image = work / 'gaussian.png'
         with self.gpu.use(timing):
@@ -165,7 +168,8 @@ class Pipeline:
                 frame = json.loads(frame_path.read_text())
             with timing.stage('gaussian_render', cached=gaussian_image.exists()):
                 if not gaussian_image.exists():
-                    write_rgb(gaussian_image, join_views(self.renderer.render(data, frame, FOUR_ANGLES, 1024)))
+                    write_rgb(gaussian_image, join_views(self.renderer.render(data, frame, SIX_ANGLES, VIEW_SIZE)))
+                assert read_rgb(gaussian_image).shape == (3 * VIEW_SIZE, 2 * VIEW_SIZE, 3)
         task.prepared = data, frame
 
     def refine(self, task: Task, api: GenerationAPI) -> None:
@@ -188,16 +192,16 @@ class Pipeline:
             for index, (model, directory, seed) in enumerate(attempts):
                 attempt = work / directory
                 attempt.mkdir(exist_ok=True)
-                self.phase(task, f'{model}: four-view refinement')
+                self.phase(task, f'{model}: six-view refinement')
                 with timing.stage('fal_refine' if seed is None else f'fal_nano_retry_{index}', cached=(attempt / 'fal_refine.png').exists()):
                     fal_image = api.refine(work / 'gaussian.png', self.prompt, attempt, nano_seed=seed)
                     views = split_views(read_rgb(fal_image))
                 with self.segmentation.use(timing):
                     with timing.stage('foreground_filter' if seed is None else f'foreground_filter_nano_{index}'):
-                        self.phase(task, 'U2Net + ISNet foreground masks and single-view background veto')
+                        self.phase(task, 'U2Net + ISNet on the first four views only; single-view background veto')
                         if self.segmenter is None:
                             self.segmenter = ForegroundSegmenter(PROJECT / 'ckpt/u2net.onnx', PROJECT / 'ckpt/isnet-general-use.onnx')
-                        alpha, _, _ = self.segmenter.multiview(views)
+                        alpha, _, _ = self.segmenter.multiview(views[:4])
                         filtered = filter_foreground(data, frame, alpha)
                 retained = len(filtered['xyz']) / len(data['xyz'])
                 accepted = retained >= MIN_FOREGROUND_RETAINED_FRACTION
@@ -237,10 +241,10 @@ class Pipeline:
         with self.gpu.use(timing):
             with timing.stage('filtered_gaussian_render', cached=filtered_image.exists()):
                 if not filtered_image.exists():
-                    self.phase(task, 'Filtered Gaussian four-view render with the original cameras')
+                    self.phase(task, 'Filtered Gaussian six-view render with the original cameras')
                     filtered = read_ply(filtered_path)
-                    views = (np.full((4, 1024, 1024, 3), 255, np.uint8) if len(filtered['xyz']) == 0
-                             else self.renderer.render(filtered, frame, FOUR_ANGLES, 1024))
+                    views = (np.full((6, VIEW_SIZE, VIEW_SIZE, 3), 255, np.uint8) if len(filtered['xyz']) == 0
+                             else self.renderer.render(filtered, frame, SIX_ANGLES, VIEW_SIZE))
                     write_rgb(filtered_image, join_views(views))
             with timing.stage('sampling_fps_normalization', cached=condition_path.exists(), skipped=task.image_only):
                 if not task.image_only and not condition_path.exists():
@@ -261,7 +265,7 @@ class Pipeline:
                 with np.load(work / 'condition.npz') as saved:
                     condition = saved['points']
             views = split_views(read_rgb(work / 'fal_refine.png'))
-            raw_mesh = api.rodin(views, condition, task.job.seed, work)
+            raw_mesh = api.rodin([views[index] for index in RODIN_VIEW_INDICES], condition, task.job.seed, work)
             validate_glb(raw_mesh)
 
     def postprocess(self, task: Task) -> None:
@@ -295,7 +299,7 @@ class Pipeline:
         with self.gpu.use(timing):
             with timing.stage('mesh_render', cached=image.exists()):
                 if not image.exists():
-                    self.phase(task, 'Aligned Rodin mesh four-view render')
+                    self.phase(task, 'Aligned Rodin mesh six-view render')
                     write_rgb(image, join_views(self.mesh_renderer.render(work / 'rodin.glb', matrix, frame)))
         self.phase(task, 'Export eight deliverables')
         with timing.stage('export'):

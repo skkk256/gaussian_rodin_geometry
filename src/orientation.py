@@ -7,7 +7,8 @@ import torch
 
 from gaussian import (compute_semantic_obb, normalize_gaussians, normalized_covariances,
                       rasterize_voxel)
-from render import FIVE_ANGLES, GaussianRenderer
+from render import GaussianRenderer
+from views import FIVE_ANGLES
 
 EXTENT = .86
 CANONICAL_TO_RODIN = np.array([[1., 0., 0., 0.], [0., 0., 1., 0.],
@@ -25,9 +26,9 @@ def pointmap_view(xyz: np.ndarray, obb: dict, view: int) -> tuple[np.ndarray, np
     """World XYZ float64 [N,3] -> pointmap float32 [512,512,3], mask bool [512,512], world-to-PyTorch3D float64 [4,4]."""
     resolution = 512
     # Keep the original float64 vote-camera computation; renderer matrices are float32.
-    eye = np.array([2.5 * np.cos(np.deg2rad(30.)) * np.sin(FIVE_ANGLES[view]),
+    eye = np.array([2.5 * np.cos(np.deg2rad(30.)) * np.sin(FIVE_ANGLES[view, 0]),
                     2.5 * np.sin(np.deg2rad(30.)),
-                    2.5 * np.cos(np.deg2rad(30.)) * np.cos(FIVE_ANGLES[view])])
+                    2.5 * np.cos(np.deg2rad(30.)) * np.cos(FIVE_ANGLES[view, 0])])
     forward = -eye / np.linalg.norm(eye)
     right = np.cross(forward, [0., 1., 0.])
     right /= np.linalg.norm(right)

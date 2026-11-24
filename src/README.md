@@ -2,7 +2,7 @@
 
 独立项目，代码、第三方 Python 源码和权重入口都位于 `gaussian_rodin/` 内。不依赖旧 deploy、Docker、viewer 或内部 16127 服务。
 
-常规流程为：**Gaussian PLY → 属性预过滤 → SAM3D 五视角朝向投票 → canonical 四视图 → Fal 清理补全 → 前景分割过滤高斯 → 高斯体积候选采样 → FPS 4096 → 独立点云归一化 → Rodin → 保存完整逆变换。** GPT 和两次 Nano 的过滤结果均不达标时，使用第一次 GPT 图片走仅图像 Rodin 分支，跳过点云相关步骤，输出待配准模型。
+常规流程为：**Gaussian PLY → 属性预过滤 → SAM3D 五视角朝向投票 → canonical 六视图 → Fal 清理补全 → 前景分割过滤高斯 → 高斯体积候选采样 → FPS 4096 → 独立点云归一化 → Rodin → 保存完整逆变换。** GPT 和两次 Nano 的过滤结果均不达标时，使用第一次 GPT 图片走仅图像 Rodin 分支，跳过点云相关步骤，输出待配准模型。
 
 默认只执行完整逆变换；`--bbox` 是测试用的额外配准参数，第一步几何生成暂时不用。`align/` 留给后续材质模型配准，当前阶段暂不接入，不执行 ICP、DINO/SIFT 配准，也不生成材质。后续纹理化若保持原始 Rodin 顶点坐标，可直接使用同一个 `transform.json` 恢复世界坐标。
 
@@ -82,13 +82,34 @@ cd /root/Lab/gaussian_rodin
 
 这条命令只执行几何生成及完整逆变换，不启用测试用 bbox；`result_geometry` 和 `.work_geometry` 应选用尚未被其他参数占用的目录。本机历史 V1 测试使用过 `--bbox`，不能直接用此命令续跑那些工作目录。单个和批量脚本的默认输出根目录均为项目下的 `result/`。更换 prompt、重试策略或 bbox 设置必须使用不同的工作目录和结果目录；后续续跑保持命令不变。
 
+### 六视图 10 case 测试（2026-11-25）
+
+`manifests/six_views_10_20261125.json` 包含手机、书、叉子、杯架红杯、衣架、插线板与电源线、灯泡、床架、枕头、小盘，沿用原 manifest 输入和 seed。Fal 与 Rodin 各最多 10 个并发，GPU 预处理与后处理仍按原有队列调度。不加 `--bbox`：
+
+```bash
+cd /root/Lab/hyperhuman-cast/gaussian_rodin
+RUN_ROOT=/root/Lab/hyperhuman-cast/gaussian_rodin_standalone/output_1124/six_views_10_20261125
+mkdir -p "$RUN_ROOT"
+OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2 OMP_NUM_THREADS=2 \
+/root/anaconda3/envs/sam3d-objects/bin/python -B -u src/run_batch_concurrent.py \
+  --manifest manifests/six_views_10_20261125.json \
+  --output "$RUN_ROOT/result" --work-dir "$RUN_ROOT/work" \
+  --credentials .env.example --device cuda:1 \
+  --fal-workers 10 --rodin-workers 10 --max-inflight 10 \
+  2>&1 | tee -a "$RUN_ROOT/run.log"
+```
+
+四视图过滤重跑保存在 `gaussian_rodin_standalone/output_1124/six_views_10_filter4_20261125/`：复用上一批六视图的 canonical、原始渲染及 12 张已完成的 GPT/Nano 图片，重新执行前四视图分割过滤、采样、Rodin 和后处理。`fal-reuse.json` 记录复用的 request ID 与图片 hash。新工作目录配置显式记录 `filterIndices=[0,1,2,3]`，不复用旧过滤点云和 Rodin 请求。
+
+补充 `G056_簸箕` 后，完整 11 项清单为 `manifests/six_views_filter4_11_20261125.json`，结果仍写入上述四视图过滤目录。簸箕复用已有 canonical 朝向，重新生成六视图及 Fal 图片；其余 10 项复用已有 Fal 图片。所有物体均只用前四视图过滤，Rodin 接收四视角加底部，不启用 bbox。
+
 ### 四段流水并发
 
 `run_batch_concurrent.py` 使用与单物体、串行批量相同的处理代码、参数和工作目录，可以直接续跑原来的串行任务：
 
 | 流程 | 同时执行数 | 内容 |
 |---|---|---|
-| `preprocess_sam3d` | 1 | 读取、属性预过滤、SAM3D 五视角投票、原高斯四视图 |
+| `preprocess_sam3d` | 1 | 读取、属性预过滤、SAM3D 五视角投票、原高斯六视图 |
 | `fal` | `--fal-workers`，默认 2 | Fal 提交/等待/下载、前景分割过滤、过滤高斯渲染、FPS 与归一化 |
 | `rodin` | `--rodin-workers`，默认 2 | Rodin 提交/等待/下载与原始 GLB 校验 |
 | `postprocess` | 1 | 完整逆变换、可选 bbox、对齐 Mesh 渲染、八文件导出 |
@@ -119,30 +140,30 @@ result/
 |---|---|
 | `rodin.glb` | Rodin 下载的原始模型，字节不修改，保持生成坐标 |
 | `transform.json` | 有点云时保存完整逆变换及可选 bbox 修正；仅图像时标记 `imageOnly=true`、`alignment=canonical-frame-only`，只保存 canonical 坐标系粗放置矩阵，需后续配准 |
-| `fal_refine.png` | 最终采用的 GPT 或 Nano Banana 补全结果，2048×2048 四视图拼图；两次 Nano 均不达标时使用第一次 GPT Image 图片进行仅图像生成 |
-| `gaussian.png` | 属性预过滤后、前景过滤前的高斯渲染；也是 Fal 的精确输入，2048×2048 四视图拼图 |
+| `fal_refine.png` | 最终采用的 GPT 或 Nano Banana 补全结果，1024×1536 六视图拼图；两次 Nano 均不达标时使用第一次 GPT Image 图片进行仅图像生成 |
+| `gaussian.png` | 属性预过滤后、前景过滤前的高斯渲染；也是 Fal 的精确输入，1024×1536 六视图拼图 |
 | `gaussian_filter.png` | 前景过滤后的高斯渲染；与原图共用相机；全部删空时输出白底空图 |
-| `rodin.png` | 原始 GLB 应用最终 `transform.json` 后的 Mesh 四视图；包含可选 bbox 修正，灰蓝色几何明暗显示，无材质 |
+| `rodin.png` | 原始 GLB 应用最终 `transform.json` 后的 Mesh 六视图；包含可选 bbox 修正，灰蓝色几何明暗显示，无材质 |
 | `gaussian_filter.ply` | 实际过滤后的高斯，保留原世界坐标及源 PLY 属性顺序；仅图像模式允许 0 点 |
 | `timing.json` | 各次执行尝试、逐阶段处理与排队耗时、缓存状态、其他开销与累计处理耗时，单位为秒 |
 
-四张图的四格顺序均为：左上 front、右上 right、左下 back、右下 left。每格 1024×1024，白背景，透视相机仰角 30°；各阶段使用同一组相机。图像接口和内存数据使用 RGB，OpenCV 编解码边界做颜色转换。
+四张 PNG 的六格顺序均为：第一行 front/right、第二行 back/left、第三行 top/bottom。每格 512×512，白背景。前四张保留原来的 30° 俯视角，顶底两张分别从正上方垂直向下、正下方垂直向上直拍；各阶段使用同一组相机。前景分割与高斯过滤只使用前四张侧视图，顶视图和底视图不参与过滤；Rodin 只上传前四张和底视图，省略顶视图。图像接口和内存数据使用 RGB，OpenCV 编解码边界做颜色转换。
 
 这些文件已足够后续使用原始模型和恢复矩阵，也足够独立浏览图片、耗时和 3D 对比。精确上传点云、canonical frame、请求状态及输入 hash 保存在独立的 `.work/<scene_id>/<object_id>/`，用于断点恢复和点击重跑，不属于交付输出；不导出对齐 GLB、诊断图或 pointmap。bbox 配准结果直接包含在 `transform.json` 中。清理工作目录后仍可查看结果，但不能从 viewer 重跑；重新生成需要新的结果目录。
 
-同一工作目录要求源文件内容、ID、seed、prompt、API 参数和 `--bbox` 开关一致；修改时使用新工作目录和输出目录。付费生成的 POST 不自动重试。提交前写入状态，若网络中断导致提交状态不确定，明确报错，需检查服务端任务后处理该工作目录；不会悄悄创建第二次付费任务。已有 request ID 的任务可以继续轮询、下载。工作目录锁防止同时处理同一物体。
+同一工作目录要求源文件内容、ID、seed、prompt、API 参数、过滤视角和 `--bbox` 开关一致；修改时使用新工作目录和输出目录。付费生成的 POST 不自动重试。提交前写入状态，若网络中断导致提交状态不确定，明确报错，需检查服务端任务后处理该工作目录；不会悄悄创建第二次付费任务。已有 request ID 的任务可以继续轮询、下载。工作目录锁防止同时处理同一物体。
 
 两次 Nano 仍不达标时，八文件结构不变，PLY 保留第二次 Nano 的实际过滤结果，允许为空；不写入 `condition.npz`，不伪造 FPS 或点云归一化矩阵。仅图像结果的 `transform.json` 额外记录 `imageOnly=true`、`alignment=canonical-frame-only` 和 `referenceObb`，`rodinToWorld` 使用原始 canonical→world 矩阵作粗放置，不保证图像生成模型的世界坐标尺度及位置准确；需要后续单独配准。即使传入测试参数 `--bbox`，该模式也明确跳过 bbox，因为没有有效 condition FPS。
 
 ## 通用结果 viewer
 
-在项目目录中，仅指定结果根目录即可启动；浏览器打开 `http://服务器地址:7880`：
+在项目目录中，仅指定结果根目录即可启动；浏览器打开 `http://服务器地址:7888`：
 
 ```bash
 /root/anaconda3/envs/sam3d-objects/bin/python -B -u src/viewer.py --results ./result
 ```
 
-默认 `--work-dir` 为项目 `.work/`，`--credentials` 为项目 `.env.example`，`--device cuda:1`，`--host 0.0.0.0`，`--port 7880`。自定义输出位置时指定它对应的工作目录：
+默认 `--work-dir` 为项目 `.work/`，`--credentials` 为项目 `.env.example`，`--device cuda:1`，`--host 0.0.0.0`，`--port 7888`。自定义输出位置时指定它对应的工作目录：
 
 ```bash
 /root/anaconda3/envs/sam3d-objects/bin/python -B -u src/viewer.py \
@@ -150,9 +171,11 @@ result/
   --credentials /private/keys.env --device cuda:1 --port 7880
 ```
 
-viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.json`、comparison manifest 或手工生成 index。只展示原高斯 / Fal / 过滤高斯 / 对齐 Mesh 四视图、模型及变换下载、`timing.json` 耗时和 3D 对比。支持搜索场景或物体；批量运行中点击刷新即可看到已完成项。3D 页面保留并排、叠加、单独查看及前后左右顶视角；对原始 GLB 应用 `transform.json`，与世界坐标中的过滤高斯保持同一变换基准。浏览只依赖八个结果文件，不需要 GPU、原输入或工作目录；重跑才需要这些资源。
+viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.json`、comparison manifest 或手工生成 index。只展示原高斯 / Fal / 过滤高斯 / 对齐 Mesh 六视图、模型及变换下载、`timing.json` 耗时和 3D 对比。支持搜索场景或物体；批量运行中点击刷新即可看到已完成项。3D 页面保留并排、叠加、单独查看及前后左右顶视角；对原始 GLB 应用 `transform.json`，与世界坐标中的过滤高斯保持同一变换基准。浏览只依赖八个结果文件，不需要 GPU、原输入或工作目录；重跑才需要这些资源。
 
-点击「重新生成」提交一次新请求，范围可选「仅重跑 Rodin」或「重跑 Fal + Rodin」。前者复用 Fal、过滤高斯和精确条件点，后者复用原四视图与朝向并重做 Fal、过滤和采样。均保留原来的 bbox 开关和固定 API 参数，Rodin 使用一个新 seed。重跑串行执行，页面显示排队 / 运行 / 成功 / 失败及日志；完成后选择相应版本即可比较。
+列表使用宽 768、按原图比例保留高度、quality 85 的 WebP 缩略图，首次访问时生成并保存在 `.viewer/<结果路径hash>/previews/`，点击仍打开原始 PNG。结果目录索引与预览缓存在本地保存，重复打开页面不再逐项访问共享盘；点击刷新重新扫描目录，源文件路径、大小或修改时间改变后会生成新的预览缓存。PNG 和 WebP 允许浏览器缓存一小时，并支持 ETag 条件请求；页面、接口及运行日志不缓存。耗时详情展开时才读取。页面不自动轮询，使用刷新按钮更新结果。
+
+点击「重新生成」提交一次新请求，范围可选「仅重跑 Rodin」或「重跑 Fal + Rodin」。前者复用 Fal、过滤高斯和精确条件点，后者复用朝向，重新渲染六视图并重做 Fal、过滤和采样。旧四视图结果需要选择完整重跑，不能仅重跑 Rodin。均保留原来的 bbox 开关和固定 API 参数，Rodin 使用一个新 seed。重跑串行执行，页面显示排队 / 运行 / 成功 / 失败及日志；完成后选择相应版本即可比较。
 
 重跑不会覆盖首次结果；独立结果和工作目录保存为 `.viewer/<结果路径hash>/<run_id>/result/<scene_id>/<object_id>/` 与对应的 `work/`，每个结果仍是相同八文件结构，且有自己的 `timing.json`。viewer 的 HTML、JS 随项目提供；Three.js / Spark 浏览器依赖不随 Git 提交，使用 viewer 时需本地提供 `third_party/viewer/three/` 和 `third_party/viewer/spark/`，保留对应上游许可证。几何生成不需要这些浏览器依赖。viewer 不写进结果目录，也不通过网页暴露凭据或工作目录。
 
@@ -160,7 +183,7 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 
 `timing.json` 在后端自动生成，viewer 直接读取显示，不从图片时间或请求日志估算。`totalSeconds` 是该物体在同一工作目录中的所有尝试的累计处理秒数，扣除本地排队；`attempts[-1].totalSeconds` 是最近一次处理耗时。每条新尝试另存 `wallSeconds`（实际经过时间）、`queueSeconds`（本地排队），满足 `totalSeconds = wallSeconds - queueSeconds`，并包含 `startedAt / finishedAt`（UTC）、`status`、`stages` 和 `overheadSeconds`。每阶段有 `name / seconds / status`：`completed` 实际执行，`cached` 复用已有结果，`skipped` 未启用 bbox，失败或中断明确标记。
 
-记录完整覆盖：管线初始化、输入读取与属性预过滤、SAM3D 加载 / warmup / 五视角朝向估计、原四视图渲染、Fal 提交 / 轮询等待 / 下载 / 图片解码、分割模型加载与前景过滤、过滤后四视图渲染、体积采样 / FPS / 独立归一化、逆变换与恢复校验、Rodin 提交 / 轮询等待 / 下载 / GLB 校验、可选 bbox、变换文件写入、对齐 Mesh 渲染及结果导出。模型加载和 CUDA warmup 计入实际发生的阶段；同一批共享的管线初始化仅计入首个物体一次。配置校验、状态保存等未归入单阶段的开销放在 `overheadSeconds`，各阶段扣除本地排队后加该开销等于该次总处理时长；总时长计至结果导出结束，最终计时文件与完成状态的落盘不递归计时。
+记录完整覆盖：管线初始化、输入读取与属性预过滤、SAM3D 加载 / warmup / 五视角朝向估计、原六视图渲染、Fal 提交 / 轮询等待 / 下载 / 图片解码、分割模型加载与前景过滤、过滤后六视图渲染、体积采样 / FPS / 独立归一化、逆变换与恢复校验、Rodin 提交 / 轮询等待 / 下载 / GLB 校验、可选 bbox、变换文件写入、对齐 Mesh 渲染及结果导出。模型加载和 CUDA warmup 计入实际发生的阶段；同一批共享的管线初始化仅计入首个物体一次。配置校验、状态保存等未归入单阶段的开销放在 `overheadSeconds`，各阶段扣除本地排队后加该开销等于该次总处理时长；总时长计至结果导出结束，最终计时文件与完成状态的落盘不递归计时。
 
 并发模式下，每次执行的 `stages` 正好对应上述四个流程，每项保存 `seconds / processingSeconds / queueSeconds / overheadSeconds / details`。`details` 保留实际子步骤耗时；`queueSeconds` 包括线程池等待、流程交接及 GPU / 分割器资源等待，`processingSeconds` 包括 API 请求的服务端等待和下载。原始阶段记录满足 `seconds = processingSeconds + queueSeconds + overheadSeconds`；物体 `totalSeconds = sum(seconds - queueSeconds) + 顶层 overheadSeconds`。串行模式同样扣除 GPU / 分割器等待。viewer 和阶段完成日志以扣除排队后的时间显示阶段耗时，排队仅单独展示；历史记录也按已有阶段明细计算显示，不改写结果文件。
 
@@ -179,11 +202,11 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 
 1. **属性预过滤。** 去掉非有限记录、opacity `<0.01`、协方差 3σ 半径超过稳健物体对角线四倍，以及离主体极远的记录。各向异性只统计，不作为删除条件，保留桌面等扁平高斯。
 2. **朝向。** 在水平面求稳健最小面积 OBB，按源坐标约定锚定轴向。从方位角 `0/72/144/216/288°`、仰角 `30°` 渲染五张 512×512 图；每视角用 SAM3D stage1 coarse（10 steps、seed 42）投一票，选水平 quarter turn。平票按 coarse / Gaussian 体素的 Chamfer 最小值决定。体素仅参与朝向判断，不上传 Rodin。保存 canonical→world 矩阵 **P**。
-3. **四视图与 Fal。** 按确定的 canonical 朝向渲染四视图，拼成 2×2 图，请求下面列出的 Fal 模型。通用 prompt 完整保存在 `fal_prompt.txt`：清理扫描杂质、补全缺失，保持物体身份、数量、真实结构、材质和各格相机投影一致，不添加文字或边框。
-4. **前景与高斯过滤。** Fal 每格同时运行 U2Net 320×320 和 ISNet 1024×1024，取前景概率逐像素最大值。使用 `alpha >= 0.25`，二值膨胀 4 次。将高斯中心投影到四张图，**任意一个有效投影在 mask 外即删除**；相机背后或图像外的无效投影不投票。以属性预过滤后的高斯数为分母，GPT 过滤后保留不足 30%（删除超过 70%，包括全部删除）时，明确记录并换 `google/nano-banana-2.1/edit` 最多尝试两次，使用 seed 和 `(seed + 1) % 65536`。重试使用原始 `gaussian.png`、相同的当前默认 prompt、原始待过滤高斯和相机；不对 GPT 结果二次编辑或继续裁减。Nano 任一次保留至少 30% 即采用对应点云；两次均低于 30%（包括全部删空）时，采用第一次 GPT Image 的四视图，只上传图片，省略全部点云 condition 字段，跳过 FPS、点云归一化与 bbox。工作目录 `image-only.json` 明确记录该模式与原因。不使用 IoU 门槛、连通域清理或回滚，保留记录不移动。工作目录 `foreground_filter.json` 保存最多三次的数量、保留率、seed、request ID 和选择结果；`fal_gpt/`、`fal_nano/`、`fal_nano_2/` 分别保存图片和请求日志，续跑复用原请求。
+3. **六视图与 Fal。** 按确定的 canonical 朝向渲染六视图，拼成 3 行 2 列图，请求下面列出的 Fal 模型。通用 prompt 完整保存在 `fal_prompt.txt`：清理扫描杂质、补全缺失，保持物体身份、数量、真实结构、材质和各格相机投影一致，不添加文字或边框。
+4. **前景与高斯过滤。** 仅对 Fal 的前四格同时运行 U2Net 320×320 和 ISNet 1024×1024，取前景概率逐像素最大值。使用 `alpha >= 0.25`，在 512 分辨率上二值膨胀 2 次（与原 1024 分辨率的 4 次保持相同相对容差）。将高斯中心投影到前四张侧视图，顶底两张不参与分割与过滤，**任意一个有效投影在 mask 外即删除**；相机背后或图像外的无效投影不投票。以属性预过滤后的高斯数为分母，GPT 过滤后保留不足 30%（删除超过 70%，包括全部删除）时，明确记录并换 `google/nano-banana-2.1/edit` 最多尝试两次，使用 seed 和 `(seed + 1) % 65536`。重试使用原始 `gaussian.png`、相同的当前默认 prompt、原始待过滤高斯和相机；不对 GPT 结果二次编辑或继续裁减。Nano 任一次保留至少 30% 即采用对应点云；两次均低于 30%（包括全部删空）时，从第一次 GPT Image 的六视图中取前四张和底视图，只上传这五张图片，省略全部点云 condition 字段，跳过 FPS、点云归一化与 bbox。工作目录 `image-only.json` 明确记录该模式与原因。不使用 IoU 门槛、连通域清理或回滚，保留记录不移动。工作目录 `foreground_filter.json` 保存最多三次的数量、保留率、seed、request ID 和选择结果；`fal_gpt/`、`fal_nano/`、`fal_nano_2/` 分别保存图片和请求日志，续跑复用原请求。
 5. **采样。** 从过滤后 opacity `>0.2` 的高斯随机等概率选择 65,536 次，在各自 `opacity × exp(-0.5 × Mahalanobis²) >= 0.2` 椭球体积内采样。seed 42。转到 canonical 坐标，保留 XYZ 绝对值均 `<0.98` 的候选，使用确定性 greedy GPU FPS（固定首点）取 4096 点。这是体积点，可能含内部点。
 6. **独立点云归一化。** 根据实际 4096 点自己的 AABB 中心 `c` 和最长边 `L`，计算 `condition=(canonical−c)×1.96/L`，保存 canonical→condition 矩阵 **N**。只做等比缩放和中心平移；最长轴范围 `[-0.98,0.98]`，其他轴保持比例。不能以高斯渲染归一化代替这一步。
-7. **Rodin。** 上传 Fal 四张图和这批归一化的 4096×3 点，下载原始 GLB。模型参数固定如下。
+7. **Rodin。** 上传 Fal 的前四张和底视图共五张图，以及这批归一化的 4096×3 点，下载原始 GLB。模型参数固定如下。
 8. **完整逆变换。** 计算 **`M_inverse = P × inverse(N)`**，包括点云归一化的反向缩放和平移，以及 canonical 的轴向、朝向、缩放和平移。内部校验该矩阵能把实际上传点云恢复为原始世界坐标的 FPS 点。默认保存 `rodinToWorld = M_inverse`。
 9. **可选 bbox 配准（`--bbox`）。** 从原始 GLB 表面按面积确定性采样 8000 点，seed 为 0，包含 GLB 内部节点变换。先应用 `M_inverse`，然后在**过滤后高斯的语义 OBB 轴系**中，将模型与**同一批未归一化的 4096 个 FPS 世界坐标点**比较。两侧逐轴取 `0.25% / 99.75%` 分位范围，用最长边比计算一个等比缩放，并将范围中心对齐；固定旋转，不搜索朝向，不做逐轴非等比缩放。把 OBB 内修正转换为世界坐标修正 **C**，最终保存 **`rodinToWorld = C × M_inverse`**。原始 GLB、高斯与三张输入/过滤图片保持原样；`rodin.png` 使用 bbox 后的最终矩阵。
 
@@ -197,7 +220,7 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 
 ## Fal 完整参数
 
-默认使用 **GPT Image 2.6 Sunburst edit**，精确模型 ID 为 **`openai/gpt-image-2.6/sunburst/edit`**。`src/fal_prompt.txt` 与 `prompts/fal_v1.en.txt` 完全一致，默认使用当前用户修订版 V1。
+默认使用 **GPT Image 2.6 Sunburst edit**，精确模型 ID 为 **`openai/gpt-image-2.6/sunburst/edit`**。`src/fal_prompt.txt` 与 `prompts/fal_six_views.en.txt` 完全一致，保留当前用户修订版 V1 的修复要求，更新为六视图布局，明确顶视图和底视图的垂直拍摄方向。
 
 | 字段 | 值 |
 |---|---|
@@ -205,7 +228,7 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 | `prompt` | `src/fal_prompt.txt` 全文，原样发送 |
 | `image_urls` | 一张 `gaussian.png` 的 PNG data URL |
 | `num_images` | `1` |
-| `image_size` | `{"width":2048,"height":2048}` |
+| `image_size` | `{"width":1024,"height":1536}` |
 | `quality` | `high` |
 | `reasoning_effort` | `high` |
 | `output_format` | `png` |
@@ -214,7 +237,7 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 
 提交 HTTP 超时 180 秒，状态 GET 超时 60 秒，每 5 秒轮询，单次等待最多 60 分钟；可续跑已有任务。
 
-仅当 GPT 高斯保留率不足 30% 时，使用 `POST https://queue.fal.run/google/nano-banana-2.1/edit` 最多尝试两次：`num_images=1`、`aspect_ratio=1:1`、`resolution=2K`、`output_format=png`、`thinking_level=high`、两次 `seed` 分别为该物体的 manifest/命令行 seed 与 `(seed + 1) % 65536`；prompt 和输入图片与 GPT 完全相同。每次请求各有独立日志。任一次通过保留率检查即使用对应图片和点云；两次 Nano 均不达标时，只使用第一次 GPT Image 的图片，不发送点云 condition。当前已有 34 个结果中，叉子删除 99.70%、餐刀删除 88.73%，其他物体最高删除 47.31%，因此 70% 阈值只会标记这两个已有异常案例；重新生成后的触发情况由新结果决定。
+仅当 GPT 高斯保留率不足 30% 时，使用 `POST https://queue.fal.run/google/nano-banana-2.1/edit` 最多尝试两次：`num_images=1`、`aspect_ratio=2:3`、`resolution=1K`、`output_format=png`、`thinking_level=high`、两次 `seed` 分别为该物体的 manifest/命令行 seed 与 `(seed + 1) % 65536`；prompt 和输入图片与 GPT 完全相同。每次请求各有独立日志。Nano 只提供分辨率档位，原生单格不保证达到 512；下载后校验接近 2:3 的画幅（允许服务端像素取整），统一缩放到 1024×1536 PNG 后切为六格 512×512，原始返回尺寸记入请求日志的 `downloadedShape`。任一次通过保留率检查即使用对应图片和点云；两次 Nano 均不达标时，只使用第一次 GPT Image 的图片，不发送点云 condition。当前已有 34 个结果中，叉子删除 99.70%、餐刀删除 88.73%，其他物体最高删除 47.31%，因此 70% 阈值只会标记这两个已有异常案例；重新生成后的触发情况由新结果决定。
 
 ## Rodin 完整参数
 
@@ -222,8 +245,8 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 
 | 字段 | 值 |
 |---|---|
-| `images` | 四个独立 PNG，按四视图拼图的逐行顺序上传 |
-| `image_label` | `["F","L","B","R"]` |
+| `images` | 五个独立 512×512 PNG：front/right/back/left/bottom；不上传 top |
+| `image_label` | `["F","L","B","R","D"]` |
 | `tier` | `Gen-2.5-Medium` |
 | `quality` | `medium` |
 | `mesh_mode` | `Raw` |
@@ -236,6 +259,6 @@ viewer 直接扫描 `result/<scene_id>/<object_id>/`，无需旧版 `progress.js
 | `pcd_condition` | 有点云时发送实际归一化后的 `4096×3` XYZ JSON 列表；仅图像时省略 |
 | `seed` | 单物体 `--seed`，默认 22101；批量 manifest 每行的 `seed` |
 
-`image_label` 按 Rodin 物体局部方向定义；图中右上是相机位于 +X 的一侧，对应标签 L，右下相机位于 −X，对应 R。不交换图片，也不将标签改成 F/R/B/L。不发送内部服务的 `normalize`、`point_count`、`pcd_tokens`、`cfg`、`steps` 或 `cutoff` 参数。
+`image_label` 按 Rodin 物体局部方向定义；图中右上是相机位于 +X 的一侧，对应标签 L，第二行右侧相机位于 −X，对应 R；第三行右侧为底视图，对应 D。不交换图片，也不将标签改成 F/R/B/L。不发送内部服务的 `normalize`、`point_count`、`pcd_tokens`、`cfg`、`steps` 或 `cutoff` 参数。
 
 生成 POST HTTP 超时 600 秒；状态 / 下载地址查询超时 180 秒，文件下载超时 300 秒。每 5 秒轮询，单次等待最多 90 分钟；超时后用同一命令继续已有任务。

@@ -3,20 +3,21 @@ from scipy import ndimage
 import torch
 
 from gaussian import quaternion_matrix
-from render import FOUR_ANGLES, camera_matrices
+from render import camera_matrices
+from views import SIX_ANGLES, VIEW_SIZE
 
 
 def filter_foreground(data: dict, frame: dict, alpha: np.ndarray) -> dict:
-    """Gaussian float64 arrays [N,...], alpha float32 [4,1024,1024] -> selected Gaussian arrays [M,...]."""
-    assert alpha.shape == (4, 1024, 1024)
-    masks = np.stack([ndimage.binary_dilation(a >= .25, iterations=4) for a in alpha])
-    matrices, intrinsics = camera_matrices(frame['obb'], frame['normalizationScale'], FOUR_ANGLES, 1024)
+    """Gaussian float64 arrays [N,...], first-four-view alpha float32 [4,512,512] -> selected Gaussian arrays [M,...]."""
+    assert alpha.shape == (4, VIEW_SIZE, VIEW_SIZE)
+    masks = np.stack([ndimage.binary_dilation(a >= .25, iterations=2) for a in alpha])
+    matrices, intrinsics = camera_matrices(frame['obb'], frame['normalizationScale'], SIX_ANGLES[:4], VIEW_SIZE)
     keep = np.ones(len(data['xyz']), dtype=bool)
     for matrix, k, mask in zip(matrices, intrinsics, masks):
         camera = data['xyz'] @ matrix[:3, :3].T + matrix[:3, 3]
         uv = np.rint(camera[:, :2] / np.maximum(camera[:, 2, None], 1e-5)
                      * [k[0, 0], k[1, 1]] + [k[0, 2], k[1, 2]] - .5).astype(int)
-        valid = (camera[:, 2] > 1e-5) & np.all((uv >= 0) & (uv < 1024), axis=1)
+        valid = (camera[:, 2] > 1e-5) & np.all((uv >= 0) & (uv < VIEW_SIZE), axis=1)
         keep[valid] &= mask[uv[valid, 1], uv[valid, 0]]
     return {key: value[keep] for key, value in data.items()}
 

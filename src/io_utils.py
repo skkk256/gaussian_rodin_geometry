@@ -8,6 +8,8 @@ import tempfile
 import cv2
 import numpy as np
 
+from views import VIEW_SIZE
+
 OUTPUT_FILES = ('rodin.glb', 'transform.json', 'fal_refine.png', 'gaussian.png', 'gaussian_filter.png', 'gaussian_filter.ply', 'rodin.png', 'timing.json')
 
 
@@ -46,15 +48,18 @@ def write_rgb(path: Path, rgb: np.ndarray) -> None:
 
 
 def join_views(views: np.ndarray) -> np.ndarray:
-    """RGB uint8 [4,1024,1024,3] -> RGB uint8 [2048,2048,3], front/right/back/left in row-major order."""
-    assert views.shape == (4, 1024, 1024, 3) and views.dtype == np.uint8
-    return np.concatenate((np.concatenate(views[:2], axis=1), np.concatenate(views[2:], axis=1)), axis=0)
+    """RGB uint8 [6,512,512,3] -> RGB uint8 [1536,1024,3], front/right/back/left/top/bottom, three rows."""
+    assert views.shape == (6, VIEW_SIZE, VIEW_SIZE, 3) and views.dtype == np.uint8
+    return np.concatenate([np.concatenate(views[start:start + 2], axis=1) for start in (0, 2, 4)], axis=0)
 
 
 def split_views(rgb: np.ndarray) -> list[np.ndarray]:
-    """RGB uint8 [2048,2048,3] -> four RGB uint8 [1024,1024,3] views in row-major order."""
-    assert rgb.shape == (2048, 2048, 3) and rgb.dtype == np.uint8
-    return [rgb[:1024, :1024], rgb[:1024, 1024:], rgb[1024:, :1024], rgb[1024:, 1024:]]
+    """RGB uint8 [H,W,3], approximately 2:3 portrait -> six RGB uint8 [512,512,3] views in row-major order."""
+    assert rgb.dtype == np.uint8 and rgb.ndim == 3 and rgb.shape[2] == 3
+    assert np.isclose(rgb.shape[0] / rgb.shape[1], 1.5, rtol=.01), 'Expected a three-row, two-column six-view image'
+    rgb = cv2.resize(rgb, (2 * VIEW_SIZE, 3 * VIEW_SIZE), interpolation=cv2.INTER_AREA)
+    return [rgb[row * VIEW_SIZE:(row + 1) * VIEW_SIZE, col * VIEW_SIZE:(col + 1) * VIEW_SIZE]
+            for row in range(3) for col in range(2)]
 
 
 def validate_glb(path: Path) -> None:

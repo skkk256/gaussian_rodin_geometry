@@ -10,17 +10,19 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from io_utils import png_bytes, sha256, validate_glb, write_json
+from io_utils import join_views, png_bytes, read_rgb, sha256, split_views, validate_glb, write_json, write_rgb
+from views import VIEW_SIZE
 
 FAL_MODEL = 'openai/gpt-image-2.6/sunburst/edit'
-FAL_SETTINGS = dict(num_images=1, image_size=dict(width=2048, height=2048), quality='high',
+FAL_SETTINGS = dict(num_images=1, image_size=dict(width=2 * VIEW_SIZE, height=3 * VIEW_SIZE), quality='high',
                     reasoning_effort='high', output_format='png', background='opaque')
 NANO_MODEL = 'google/nano-banana-2.1/edit'
-NANO_SETTINGS = dict(num_images=1, aspect_ratio='1:1', resolution='2K', output_format='png', thinking_level='high')
+NANO_SETTINGS = dict(num_images=1, aspect_ratio='2:3', resolution='1K', output_format='png', thinking_level='high')
 RODIN_API = 'https://api.hyper3d.com/api/v2'
+RODIN_VIEW_INDICES = (0, 1, 2, 3, 5)
 RODIN_SETTINGS = dict(tier='Gen-2.5-Medium', quality='medium', mesh_mode='Raw',
                       geometry_file_format='glb', material='None', use_original_alpha='true',
-                      is_symmetric='unknown', image_label=['F', 'L', 'B', 'R'],
+                      is_symmetric='unknown', image_label=['F', 'L', 'B', 'R', 'D'],
                       pcd_condition_cfg='true', pcd_condition_weight='0.3')
 
 
@@ -79,14 +81,16 @@ class GenerationAPI:
         response.raise_for_status()
         temporary = target.with_suffix('.downloading')
         temporary.write_bytes(response.content)
-        state.update(status='completed', outputSha256=sha256(temporary))
+        rgb = read_rgb(temporary)
+        write_rgb(temporary, join_views(np.stack(split_views(rgb))))
+        state.update(status='completed', downloadedShape=list(rgb.shape), outputSha256=sha256(temporary))
         write_json(journal, state)
         temporary.replace(target)
         return target
 
     def rodin(self, images: list[np.ndarray], points: np.ndarray | None, seed: int, work: Path) -> Path:
-        """Four RGB uint8 [1024,1024,3] images, condition XYZ float32 [4096,3] or None -> raw GLB path."""
-        assert len(images) == 4
+        """Five RGB uint8 [512,512,3] images (front/right/back/left/bottom), condition XYZ float32 [4096,3] or None -> raw GLB path."""
+        assert len(images) == 5 and all(image.shape == (VIEW_SIZE, VIEW_SIZE, 3) for image in images)
         assert points is None or (points.shape == (4096, 3) and np.isfinite(points).all())
         assert 0 <= seed < 65536
         encoded = [png_bytes(image) for image in images]

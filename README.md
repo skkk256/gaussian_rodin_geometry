@@ -1,6 +1,6 @@
 # Gaussian Rodin Geometry
 
-输入一个物体的 Gaussian PLY，输出 Rodin 几何模型、恢复到原始世界坐标的变换矩阵，以及各阶段四视图和过滤后的高斯。
+输入一个物体的 Gaussian PLY，输出 Rodin 几何模型、恢复到原始世界坐标的变换矩阵，以及各阶段六视图和过滤后的高斯。
 
 当前为**第一步几何生成**，不生成材质，也不接入后续精配准。`align/` 是为后续材质模型配准保留的独立模块，当前流程不用运行它。`--bbox` 是测试用的额外配准参数，第一步几何生成暂时不用，下面的运行命令不传该参数。默认仍会保存几何生成所需的完整坐标逆变换。
 
@@ -10,17 +10,17 @@
 Gaussian PLY
   → 属性预过滤
   → SAM3D 五视角朝向估计
-  → 高斯四视图渲染
-  → Fal 清理与补全四视图
+  → 高斯六视图渲染
+  → Fal 清理与补全六视图
   → 前景分割与高斯过滤
   → 高斯体积采样、FPS 4096 与独立点云归一化
   → Rodin 几何生成
   → 保存完整逆变换与结果
 ```
 
-Fal 默认使用 `openai/gpt-image-2.6/sunburst/edit`，prompt 为 [src/fal_prompt.txt](src/fal_prompt.txt)，与当前用户修订版 [V1 英文](prompts/fal_v1.en.txt) 一致，[中文对照](prompts/fal_v1.zh.txt) 用于阅读和修订。
+Fal 默认使用 `openai/gpt-image-2.6/sunburst/edit`，prompt 为 [src/fal_prompt.txt](src/fal_prompt.txt)，沿用当前用户修订版的修复要求，并使用 [六视图英文](prompts/fal_six_views.en.txt) 布局说明，[中文对照](prompts/fal_six_views.zh.txt) 用于阅读和修订。
 
-以属性预过滤后的高斯数量为基准，如果 GPT 输出导致高斯删除超过 70%，自动改用 `google/nano-banana-2.1/edit` 最多尝试两次。两次均使用相同原始输入图、prompt 和相机，seed 分别为该物体的 seed 与 `(seed + 1) % 65536`；任一次保留至少 30% 即使用对应点云继续。两次 Nano 均保留不足 30%（包括全部删空）时，使用第一次 GPT Image 的四视图继续生成 Rodin，仅上传图片，省略 `pcd_condition`、`pcd_condition_cfg`、`pcd_condition_weight`，跳过 FPS、点云归一化和测试用 bbox 配准。选择结果与原因保存在工作目录日志中。
+以属性预过滤后的高斯数量为基准，如果 GPT 输出导致高斯删除超过 70%，自动改用 `google/nano-banana-2.1/edit` 最多尝试两次。两次均使用相同原始输入图、prompt 和相机，seed 分别为该物体的 seed 与 `(seed + 1) % 65536`；任一次保留至少 30% 即使用对应点云继续。两次 Nano 均保留不足 30%（包括全部删空）时，从第一次 GPT Image 的六视图中选择前、右、后、左、底五张继续生成 Rodin，仅上传图片，省略 `pcd_condition`、`pcd_condition_cfg`、`pcd_condition_weight`，跳过 FPS、点云归一化和测试用 bbox 配准。选择结果与原因保存在工作目录日志中。
 
 ## 环境与配置
 
@@ -89,14 +89,46 @@ result/
 |---|---|
 | `rodin.glb` | Rodin 返回的原始几何模型，保持生成坐标，尚未烘焙世界坐标变换 |
 | `transform.json` | 有点云时保存 `rodinToWorld` 完整逆变换；仅图像模式保存 canonical 坐标系的粗放置矩阵，并标记 `imageOnly=true`、`alignment=canonical-frame-only`，需要后续配准 |
-| `gaussian.png` | 前景过滤前的高斯四视图，也是 Fal 的原始输入 |
-| `fal_refine.png` | 最终采用的 GPT 或 Nano Banana 补全四视图 |
+| `gaussian.png` | 前景过滤前的高斯六视图，也是 Fal 的原始输入 |
+| `fal_refine.png` | 最终采用的 GPT 或 Nano Banana 补全六视图 |
 | `gaussian_filter.ply` | 实际过滤后的高斯，保留原世界坐标和源属性；仅图像模式保存第二次 Nano 的过滤结果，可能为 0 点 |
-| `gaussian_filter.png` | 过滤高斯四视图，与原图共用相机；0 点时为空白白底图 |
-| `rodin.png` | 原始模型应用保存矩阵后的四视图，无材质；仅图像模式的放置不代表精确配准 |
+| `gaussian_filter.png` | 过滤高斯六视图，与原图共用相机；0 点时为空白白底图 |
+| `rodin.png` | 原始模型应用保存矩阵后的六视图，无材质；仅图像模式的放置不代表精确配准 |
 | `timing.json` | 各阶段处理耗时、排队及缓存记录 |
 
-四视图拼图为 2048×2048，顺序是左上 front、右上 right、左下 back、右下 left。`transform.json` 中矩阵按 column-major 存储，加载 `rodin.glb` 后应用一次即可；不要重复归一化或重复应用逆变换。仅图像模式没有点云条件约束，保存矩阵仅用于按原始 canonical 坐标系粗放置，不保证生成模型的世界坐标尺度和位置准确。
+### 六视图布局与分辨率（2026-11-25 更新）
+
+`gaussian.png`、`fal_refine.png`、`gaussian_filter.png`、`rodin.png` 均采用以下新规格，文件名和八文件目录结构不变。所有尺寸按**宽×高**表示：
+
+| 项目 | 旧版 | 当前版本 |
+|---|---|---|
+| 视图数量与布局 | 4 张，2 行 × 2 列 | 6 张，3 行 × 2 列 |
+| 单个 view | 1024×1024 | **512×512** |
+| 输出 PNG 拼图 | 2048×2048 | **1024×1536** |
+| 前四张相机 | 30° 俯视 | 保持原来的四个视角和 30° 俯视角 |
+| 新增视图 | 无 | 正上方垂直向下、正下方垂直向上 |
+| 高斯前景过滤 | 前四张 | **仍只用前四张**，顶、底不参与 |
+| Rodin 图片输入 | 前四张 | **前四张 + 底视图**，共 5 张，每张 512×512 |
+
+拼图按从左到右、从上到下排列，索引从 0 开始：
+
+```text
+┌──────────────────┬──────────────────┐
+│ 0 front（前）    │ 1 right（右）    │
+├──────────────────┼──────────────────┤
+│ 2 back（后）     │ 3 left（左）     │
+├──────────────────┼──────────────────┤
+│ 4 top（正上方）  │ 5 bottom（正下方）│
+└──────────────────┴──────────────────┘
+```
+
+GPT Image 和 Nano Banana 都处理完整六视图拼图，prompt 明确标注最后一行是正上方和正下方直拍。GPT 设置整图 1024×1536；Nano Banana 设置 `resolution=1K`、`aspect_ratio=2:3`，原生返回尺寸可能取整，下载后统一到 1024×1536，再切成六张 512×512。这里的 512 是保存与上传的单格尺寸，不代表 Nano 原生生成的单格分辨率；原始返回尺寸记录在请求日志的 `downloadedShape`。
+
+Rodin 取索引 `[0,1,2,3,5]`，**D / down 确实来自右下角**，不上传左下角 top。上传标签沿用物体局部方向的 `[F,L,B,R,D]`：拼图右上相机位于 +X，对应 L；第二行右侧相机位于 −X，对应 R。SAM3D 朝向估计独立使用原来的五张 512×512 图，与这里的六视图无关。
+
+六视图使用工作配置版本 3，不能复用旧四视图或旧过滤配置的工作缓存。重新批跑请指定新的 `--output` 和 `--work-dir`；viewer 浏览旧结果时仍按图片实际比例显示，旧结果不会自动变成六视图。
+
+`transform.json` 中矩阵按 column-major 存储，加载 `rodin.glb` 后应用一次即可；不要重复归一化或重复应用逆变换。仅图像模式没有点云条件约束，保存矩阵仅用于按原始 canonical 坐标系粗放置，不保证生成模型的世界坐标尺度和位置准确。
 
 工作缓存保存在 **`.work/scene_001/object_001/`**，包含朝向、实际上传点云（有点云模式）、请求日志和高斯保留率记录，用于断点续跑和后续配准。仅图像模式另存 `image-only.json`，不生成 `condition.npz`。相同命令可继续已有请求；更改输入、prompt、seed 或参数时应使用新的工作目录与结果目录。
 

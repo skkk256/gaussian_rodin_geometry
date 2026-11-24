@@ -7,6 +7,7 @@ import sys
 sys.dont_write_bytecode = True
 
 from pipeline import Job, Pipeline
+from api import RODIN_SETTINGS
 from io_utils import sha256
 
 
@@ -21,9 +22,10 @@ def main() -> None:
     root = args.job.parent
     work = root / 'work' / request['scene_id'] / request['object_id']
     work.mkdir(parents=True, exist_ok=True)
-    reuse = ['canonical.json', 'gaussian.png']
+    reuse = ['canonical.json']
     if request['mode'] == 'rodin':
-        reuse += ['fal_refine.png', 'fal-request.json', 'gaussian_filter.ply', 'gaussian_filter.png']
+        assert config['version'] == 3 and config['rodin'] == RODIN_SETTINGS, 'View/filter settings changed; select a full Fal + Rodin rerun'
+        reuse += ['gaussian.png', 'fal_refine.png', 'fal-request.json', 'gaussian_filter.ply', 'gaussian_filter.png']
         reuse += ['image-only.json'] if (parent / 'image-only.json').is_file() else ['condition.npz']
     for name in reuse:
         assert (parent / name).is_file(), f'Missing reusable cache: {name}'

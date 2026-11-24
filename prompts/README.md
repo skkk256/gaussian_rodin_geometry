@@ -7,7 +7,7 @@
 - V5：替换 V4 第一段中的保色要求，以各视图清晰、未受污染区域的可见颜色和明暗为基准，保留色相、饱和度、明度和物体自身明暗，禁止提亮较暗表面、重新打光、补光及统一各面亮度。其余三段不变。
 - V6：删除 V5 第一段中的“以每个视图中清晰、未受污染的物体区域为颜色和明暗基准。”及对应英文，其余全文不变。
 
-每版保存 `fal_vN.en.txt`（实际发送英文）和 `fal_vN.zh.txt`（中文对照）。V2–V6 为历史版本存档；V1 为用户当前修订版。生产流水线默认 `src/fal_prompt.txt` 使用当前 V1，GPT 与 Nano Banana 重试均原样使用这份 prompt。
+每版保存 `fal_vN.en.txt`（实际发送英文）和 `fal_vN.zh.txt`（中文对照）。V2–V6 为历史版本存档；V1 为用户当前修订版。2026-11-25 起生产流水线默认 `src/fal_prompt.txt` 使用 `fal_six_views.en.txt`：沿用当前 V1 的修复要求，改为三行两列的六视图说明，明确顶视图从正上方垂直向下、底视图从正下方垂直向上拍摄。前四张保持原 30° 俯视角。对应中文为 `fal_six_views.zh.txt`。GPT 与 Nano Banana 重试均原样使用这份 prompt；Rodin 仅上传前四张和底视图，标签 F/L/B/R/D。
 
 修订前 V1 已测试 G013、G027：`/root/Lab/hyperhuman-cast/temp/g013_fal_preserve_color_short`、`/root/Lab/hyperhuman-cast/temp/g027_fal_preserve_color_short`；实验目录保留当时实际使用的 prompt。
 

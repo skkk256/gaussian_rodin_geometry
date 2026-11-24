@@ -1,0 +1,68 @@
+[
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G064_手机",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G064_手机.ply",
+    "seed": 22126
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G013_书桌上的书",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G013_书桌上的书.ply",
+    "seed": 22101
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G028.1_蓝盘旁叉子",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G028.1_蓝盘旁叉子.ply",
+    "seed": 22108
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G037_杯架红杯",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G037_杯架红杯.ply",
+    "seed": 22113
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G042_衣架",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G042_衣架.ply",
+    "seed": 22115
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G063_插线板与电源线整体",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G063_插线板与电源线整体.ply",
+    "seed": 22125
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G066_白色螺口灯泡",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G066_白色螺口灯泡.ply",
+    "seed": 22128
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G071_床架",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G071_床架.ply",
+    "seed": 22129
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G073_枕头",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G073_枕头.ply",
+    "seed": 22130
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G076_黑色小盘",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G076_黑色小盘.ply",
+    "seed": 22133
+  },
+  {
+    "scene_id": "待制作物体_分割GS",
+    "object_id": "G056_簸箕",
+    "input": "/data/shengkuan/Deemos/gaussian_rodin_standalon_2/data/待制作物体_分割GS/G056_簸箕.ply",
+    "seed": 22119
+  }
+]

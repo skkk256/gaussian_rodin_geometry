@@ -16,7 +16,7 @@ import numpy as np
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Add aligned Rodin four-view images to completed results; no generation API calls.')
+    parser = argparse.ArgumentParser(description='Add aligned Rodin six-view images to completed results; no generation API calls.')
     parser.add_argument('--results', type=Path, default=PROJECT / 'result')
     parser.add_argument('--work-dir', type=Path, default=PROJECT / '.work')
     parser.add_argument('--device', default='cuda:1')

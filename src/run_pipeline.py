@@ -8,7 +8,7 @@ from pipeline import Job, PROJECT, Pipeline
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Gaussian PLY -> Fal four views -> filtered FPS -> Rodin + complete inverse transform.')
+    parser = argparse.ArgumentParser(description='Gaussian PLY -> Fal six views -> filtered FPS -> Rodin five views + complete inverse transform.')
     parser.add_argument('--input', type=Path, required=True)
     parser.add_argument('--scene-id', required=True)
     parser.add_argument('--object-id', required=True)
