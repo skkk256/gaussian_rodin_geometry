@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import time
 
 import numpy as np
@@ -20,6 +21,7 @@ NANO_MODEL = 'google/nano-banana-2.1/edit'
 NANO_SETTINGS = dict(num_images=1, aspect_ratio='2:3', resolution='1K', output_format='png', thinking_level='high')
 RODIN_API = 'https://api.hyper3d.com/api/v2'
 RODIN_VIEW_INDICES = (0, 1, 2, 3, 5)
+RODIN_OVERLOAD_RETRIES = 20
 RODIN_SETTINGS = dict(tier='Gen-2.5-Medium', quality='medium', mesh_mode='Raw',
                       geometry_file_format='glb', material='Shaded', texture_mode='extreme-low', use_original_alpha='true',
                       is_symmetric='unknown', image_label=['F', 'L', 'B', 'R', 'D'],
@@ -88,6 +90,39 @@ class GenerationAPI:
         temporary.replace(target)
         return target
 
+    def _rodin_post(self, endpoint: str, state: dict, journal: Path, **kwargs) -> dict:
+        for attempt in range(RODIN_OVERLOAD_RETRIES + 1):
+            if endpoint == '/rodin':
+                state['status'] = 'submitting'
+                write_json(journal, state)
+            response = self.session.post(RODIN_API + endpoint, **kwargs)
+            payload = response.json() if response.ok else {}
+            error = payload.get('error')
+            overloaded = (response.status_code == 429 or 500 <= response.status_code < 600
+                          or error == 'API_PARALLELISM_LIMIT_REACHED'
+                          or (error == 'API_UNKNOWN' and 'overload' in payload['message'].lower()))
+            if overloaded:
+                delay = random.uniform(.8, 1.) * min(10 * 2 ** attempt, 60)
+                if 'Retry-After' in response.headers:
+                    delay = Retry().get_retry_after(response)
+                if endpoint == '/rodin':
+                    state['status'] = 'retryable'
+                state['lastOverload'] = dict(endpoint=endpoint, httpStatus=response.status_code, error=error,
+                                             retries=attempt, sleepSeconds=delay)
+                write_json(journal, state)
+                assert attempt < RODIN_OVERLOAD_RETRIES, f'Rodin {endpoint}: overload persisted after {attempt} retries; rerun to resume'
+                print(f'Rodin {endpoint}: overload ({error or response.status_code}); '
+                      f'sleep {delay:.1f}s, retry {attempt + 1}/{RODIN_OVERLOAD_RETRIES}', flush=True)
+                response.close()
+                time.sleep(delay)
+                continue
+            if endpoint == '/rodin' and (error or not response.ok):
+                state.update(status='rejected', error=error, httpStatus=response.status_code, message=payload.get('message'))
+                write_json(journal, state)
+            response.raise_for_status()
+            assert not error, f'Rodin {endpoint}: {error}: {payload.get("message")}'
+            return payload
+
     def rodin(self, images: list[np.ndarray], points: np.ndarray | None, seed: int, work: Path) -> Path:
         """Five RGB uint8 [512,512,3] images (front/right/back/left/bottom), condition XYZ float32 [4096,3] or None -> raw GLB path."""
         assert len(images) == 5 and all(image.shape == (VIEW_SIZE, VIEW_SIZE, 3) for image in images)
@@ -107,17 +142,16 @@ class GenerationAPI:
         if journal.exists():
             state = json.loads(journal.read_text())
             assert state['request'] == request, 'Rodin inputs changed; use a new work directory'
-            assert state['status'] in ('submitted', 'completed'), 'Uncertain Rodin submission; inspect rodin-request.json before sending another paid request'
+            assert state['status'] in ('retryable', 'submitted', 'completed'), 'Uncertain or rejected Rodin submission; inspect rodin-request.json before sending another paid request'
         else:
-            state = dict(status='submitting', request=request)
+            state = dict(status='retryable', request=request)
             write_json(journal, state)
+        if state['status'] == 'retryable':
             form = [(key, json.dumps(value) if isinstance(value, list) else str(value)) for key, value in settings.items()]
             if condition is not None:
                 form.append(('pcd_condition', condition))
-            response = self.session.post(RODIN_API + '/rodin', headers=headers, data=form,
+            job = self._rodin_post('/rodin', state, journal, headers=headers, data=form,
                 files=[('images', (f'image-{i + 1}.png', body, 'image/png')) for i, body in enumerate(encoded)], timeout=600)
-            response.raise_for_status()
-            job = response.json()
             assert job['uuid'] and job['jobs']['subscription_key']
             state.update(status='submitted', job=job)
             write_json(journal, state)
@@ -129,17 +163,15 @@ class GenerationAPI:
         deadline = time.monotonic() + 5400
         while True:
             assert time.monotonic() < deadline, 'Rodin timeout; rerun the same command to resume'
-            response = self.session.post(RODIN_API + '/status', headers=headers,
+            result = self._rodin_post('/status', state, journal, headers=headers,
                 json={'subscription_key': job['jobs']['subscription_key']}, timeout=180)
-            response.raise_for_status()
-            statuses = [record['status'] for record in response.json()['jobs']]
+            statuses = [record['status'] for record in result['jobs']]
             assert statuses and not any(any(word in s.lower() for word in ('failed', 'error', 'cancel')) for s in statuses), statuses
             if all(status == 'Done' for status in statuses):
                 break
             time.sleep(5)
-        response = self.session.post(RODIN_API + '/download', headers=headers, json={'task_uuid': job['uuid']}, timeout=180)
-        response.raise_for_status()
-        entry = next(record for record in response.json()['list'] if record['name'].lower().endswith('.glb'))
+        result = self._rodin_post('/download', state, journal, headers=headers, json={'task_uuid': job['uuid']}, timeout=180)
+        entry = next(record for record in result['list'] if record['name'].lower().endswith('.glb'))
         response = self.session.get(entry['url'], timeout=300)
         response.raise_for_status()
         temporary = target.with_suffix('.downloading')

@@ -110,6 +110,8 @@ python -B -u src/run_batch_concurrent.py \
 
 ## Rodin 完整参数
 
+Rodin 提交、状态查询和下载列表遇到 HTTP 429／5xx、`API_PARALLELISM_LIMIT_REACHED`，或明确提示 overload 的 `API_UNKNOWN` 时，最多额外重试 20 次。优先遵守 `Retry-After`；否则按 10／20／40／60 秒上限退避并加入抖动。等待与重试会打印日志；已创建任务保留原 ID，不重新生成。此请求重试独立于评分不足时的 `--max-retry`。明确拒绝的提交保留为 `retryable`，可断点继续；提交期间网络超时仍保留 `submitting`，避免自动重复付费提交。
+
 使用公网 **`https://api.hyper3d.com/api/v2`**，multipart `POST /rodin`；保存返回 UUID 和 subscription key，再 `POST /status`、`POST /download` 获取原始 GLB。
 
 | 字段 | 值 |
