@@ -91,7 +91,11 @@ class ConcurrentBatch:
                             report['failed'].append(key)
                             traceback.print_exc()
                             continue
-                        if phase + 1 < len(PHASES):
+                        if phase == 3 and task.retry_phase is not None:
+                            next_phase = task.retry_phase
+                            task.queued_at = task.timing.last_checkpoint
+                            pending[pools[next_phase].submit(self.execute, task, next_phase)] = task, next_phase
+                        elif phase + 1 < len(PHASES):
                             task.queued_at = task.timing.last_checkpoint
                             pending[pools[phase + 1].submit(self.execute, task, phase + 1)] = task, phase + 1
                         else:

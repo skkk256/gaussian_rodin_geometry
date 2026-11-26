@@ -142,7 +142,7 @@ def match_view(matcher, features, ordinal, view_id, gs, mesh, ga, ma, depth):
     if not len(a) or not len(b):
         info['reason'] = f'可用角点不足：网格 {len(a)}，高斯 {len(b)}；该视角不参与求解'
         return ViewMatches(np.empty((0, 2), np.float32), np.empty((0, 2), np.float32), np.empty(0), [], info)
-    da = matcher.descriptors(features, ordinal+4, a)
+    da = matcher.descriptors(features, ordinal+features[0].shape[0]//2, a)
     db = matcher.descriptors(features, ordinal, b)
     cosine, sift = da @ db.T, sa @ sb.T
     distance = np.linalg.norm(a[:, None]-b[None], axis=-1)

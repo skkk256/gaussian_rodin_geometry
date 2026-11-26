@@ -16,10 +16,10 @@ def main() -> None:
     parser.add_argument('--work-dir', type=Path, default=PROJECT / '.work')
     parser.add_argument('--device', default='cuda:1')
     parser.add_argument('--credentials', type=Path)
-    parser.add_argument('--bbox', action='store_true', help='Enable bbox registration for all objects and save the combined transforms')
+    parser.add_argument('--max-retry', type=int, default=1, help='Additional attempts below score 70; alternate Rodin-only and FAL+Rodin retries')
     args = parser.parse_args()
     jobs = load_jobs(args.manifest)
-    pipeline = Pipeline(args.device, args.credentials, bbox=args.bbox)
+    pipeline = Pipeline(args.device, args.credentials, max_retry=args.max_retry)
     failures = []
     for job in jobs:
         try:

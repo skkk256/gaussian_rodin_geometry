@@ -7,11 +7,12 @@ import sys
 PROJECT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(PROJECT / 'third_party'))
+sys.path.insert(0, str(PROJECT))
 os.environ['NUMPY_MADVISE_HUGEPAGE'] = '0'
 os.environ['LIDRA_SKIP_INIT'] = 'true'
 os.environ['DINOV2_CHECKPOINT'] = str(PROJECT / 'ckpt/dinov2_vitl14_reg4_pretrain.pth')
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import fcntl
 import json
 import shutil
@@ -24,10 +25,11 @@ from dotenv import load_dotenv
 import torch
 
 from api import FAL_MODEL, FAL_SETTINGS, NANO_MODEL, NANO_SETTINGS, RODIN_SETTINGS, RODIN_VIEW_INDICES, GenerationAPI
-from bbox import register_bbox
+from align.generation import ALIGNMENT_SETTINGS, MINIMUM_SCORE, align_generation
+from align.matching import DinoMatcher
 from conditions import PointSampler, filter_foreground, normalize_points
 from foreground import ForegroundSegmenter
-from gaussian import compute_semantic_obb, covariance_prefilter, read_ply, write_ply
+from gaussian import covariance_prefilter, read_ply, write_ply
 from io_utils import OUTPUT_FILES, join_views, read_rgb, sha256, split_views, validate_glb, write_json, write_rgb
 from orientation import Orientation
 from render import GaussianRenderer
@@ -63,12 +65,24 @@ class Task:
     queued_at: float
     prepared: tuple[dict, dict] | None = None
     image_only: bool = False
+    attempt_index: int = 0
+    candidates: list[dict] = field(default_factory=list)
+    retry_phase: int | None = None
+
+    @property
+    def reference_work(self) -> Path:
+        return self.work / 'refinements' / f'{self.attempt_index // 2:03d}'
+
+    @property
+    def generation_work(self) -> Path:
+        return self.work / 'attempts' / f'{self.attempt_index:03d}'
 
 
 class Pipeline:
-    def __init__(self, device: str, credentials: Path | None, bbox: bool = False):
+    def __init__(self, device: str, credentials: Path | None, max_retry: int = 1):
         started = time.perf_counter()
-        self.bbox = bbox
+        assert max_retry >= 0
+        self.max_retry = max_retry
         if credentials is not None:
             assert credentials.is_file(), credentials
             load_dotenv(credentials, override=True)
@@ -78,6 +92,7 @@ class Pipeline:
         self.sampler = PointSampler(device)
         self.orientation = None
         self.segmenter = None
+        self.matcher = None
         self.gpu = Resource('gpu')
         self.segmentation = Resource('segmentation')
         self.prompt = (PROJECT / 'src/fal_prompt.txt').read_text()
@@ -87,6 +102,7 @@ class Pipeline:
             'sam3d/pipeline_ssonly.yaml', 'sam3d/ss_generator.yaml', 'sam3d/ss_generator.ckpt',
             'sam3d/ss_decoder.yaml', 'sam3d/ss_decoder.ckpt', 'dinov2_vitl14_reg4_pretrain.pth',
             'u2net.onnx', 'isnet-general-use.onnx'))
+        assert (PROJECT / 'ckpt/dinov3').is_dir()
         self.initialization_seconds = time.perf_counter() - started
 
     def begin(self, job: Job, output_root: Path, work_root: Path, *, flows: bool = False) -> Task | None:
@@ -99,16 +115,15 @@ class Pipeline:
         lock = (work / 'run.lock').open('a')
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            config = dict(version=3, source=str(job.source.resolve()), sourceSha256=sha256(job.source),
+            config = dict(version=4, source=str(job.source.resolve()), sourceSha256=sha256(job.source),
                           sceneId=job.scene_id, objectId=job.object_id, seed=job.seed,
                           views=dict(anglesRadians=SIX_ANGLES.tolist(), size=VIEW_SIZE,
                                      filterIndices=[0, 1, 2, 3], rodinIndices=list(RODIN_VIEW_INDICES)),
                           fal=dict(model=FAL_MODEL, settings=FAL_SETTINGS, prompt=self.prompt,
                                    retry=dict(model=NANO_MODEL, settings=dict(NANO_SETTINGS, seed=job.seed),
                                               minimumRetainedFraction=MIN_FOREGROUND_RETAINED_FRACTION)),
-                          rodin=RODIN_SETTINGS)
-            if self.bbox:
-                config['bbox'] = True
+                          rodin=RODIN_SETTINGS, alignment=ALIGNMENT_SETTINGS,
+                          maxRetry=self.max_retry, retryPolicy='alternate Rodin-only and FAL+Rodin')
             config_path = work / 'config.json'
             if config_path.exists():
                 assert json.loads(config_path.read_text()) == config, 'Inputs/settings changed; choose a new work directory'
@@ -138,8 +153,13 @@ class Pipeline:
         try:
             self.prepare(task)
             self.refine(task, self.api)
-            self.generate(task, self.api)
-            self.postprocess(task)
+            while True:
+                self.generate(task, self.api)
+                self.postprocess(task)
+                if task.retry_phase is None:
+                    break
+                if task.retry_phase == 1:
+                    self.refine(task, self.api)
             self.complete(task)
         except BaseException:
             self.fail(task)
@@ -173,7 +193,14 @@ class Pipeline:
         task.prepared = data, frame
 
     def refine(self, task: Task, api: GenerationAPI) -> None:
-        work, timing = task.work, task.timing
+        work, timing = task.reference_work, task.timing
+        work.mkdir(parents=True, exist_ok=True)
+        for name in ('canonical.json', 'gaussian.png'):
+            shutil.copyfile(task.work / name, work / name)
+        if task.attempt_index >= 2:
+            with timing.stage('retry_read_and_prefilter'):
+                data, _ = covariance_prefilter(read_ply(task.job.source))
+                task.prepared = data, json.loads((work / 'canonical.json').read_text())
         assert task.prepared is not None
         data, frame = task.prepared
         filtered_path = work / 'gaussian_filter.ply'
@@ -187,8 +214,9 @@ class Pipeline:
         else:
             selection = dict(beforeCount=len(data['xyz']), minimumRetainedFraction=MIN_FOREGROUND_RETAINED_FRACTION,
                              selectedModel=None, attempts=[])
-            attempts = ((FAL_MODEL, 'fal_gpt', None), (NANO_MODEL, 'fal_nano', task.job.seed),
-                        (NANO_MODEL, 'fal_nano_2', (task.job.seed + 1) % 65536))
+            seed = (task.job.seed + task.attempt_index // 2) % 65536
+            attempts = ((FAL_MODEL, 'fal_gpt', None), (NANO_MODEL, 'fal_nano', seed),
+                        (NANO_MODEL, 'fal_nano_2', (seed + 1) % 65536))
             for index, (model, directory, seed) in enumerate(attempts):
                 attempt = work / directory
                 attempt.mkdir(exist_ok=True)
@@ -257,51 +285,70 @@ class Pipeline:
         task.prepared = None
 
     def generate(self, task: Task, api: GenerationAPI) -> None:
-        work, timing = task.work, task.timing
+        work, timing = task.generation_work, task.timing
+        work.mkdir(parents=True, exist_ok=True)
+        reference = task.reference_work
         self.phase(task, 'Rodin Gen-2.5-Medium / medium / ' + ('images only' if task.image_only else 'point-cloud weight 0.3'))
         with timing.stage('rodin_generate', cached=(work / 'rodin.glb').exists()):
             condition = None
             if not task.image_only:
-                with np.load(work / 'condition.npz') as saved:
+                with np.load(reference / 'condition.npz') as saved:
                     condition = saved['points']
-            views = split_views(read_rgb(work / 'fal_refine.png'))
-            raw_mesh = api.rodin([views[index] for index in RODIN_VIEW_INDICES], condition, task.job.seed, work)
+            views = split_views(read_rgb(reference / 'fal_refine.png'))
+            raw_mesh = api.rodin([views[index] for index in RODIN_VIEW_INDICES], condition,
+                                 (task.job.seed + task.attempt_index) % 65536, work)
             validate_glb(raw_mesh)
 
     def postprocess(self, task: Task) -> None:
         work, timing = task.work, task.timing
-        with timing.stage('inverse_transform'):
-            frame = json.loads((work / 'canonical.json').read_text())
-            canonical_to_world = np.asarray(frame['canonicalToWorld']).reshape(4, 4, order='F')
-            if task.image_only:
-                matrix = canonical_to_world
-                self.phase(task, 'Image-only output: canonical-frame placement; no point-cloud normalization inverse')
-            else:
-                with np.load(work / 'condition.npz') as saved:
-                    canonical_points, condition, normalization = saved['canonical'], saved['points'], saved['normalization']
-                matrix = canonical_to_world @ np.linalg.inv(normalization)
-                restored = condition @ matrix[:3, :3].T + matrix[:3, 3]
-                world = canonical_points @ canonical_to_world[:3, :3].T + canonical_to_world[:3, 3]
-                assert np.allclose(restored, world, atol=1e-6, rtol=1e-6), 'Condition inverse does not restore the sampled world points'
-        with timing.stage('bbox_registration', skipped=not self.bbox or task.image_only):
-            if self.bbox and task.image_only:
-                self.phase(task, 'Skipping test bbox registration: image-only output has no condition FPS')
-            if self.bbox and not task.image_only:
-                self.phase(task, 'Fixed-rotation bbox registration to unnormalized filtered-Gaussian FPS')
-                obb = compute_semantic_obb(read_ply(work / 'gaussian_filter.ply')['xyz'])
-                matrix = register_bbox(work / 'rodin.glb', world, matrix, obb)
-        with timing.stage('write_transform'):
-            transform = dict(matrixOrder='column-major', rodinToWorld=dict(matrix=matrix.flatten(order='F').tolist()))
-            if task.image_only:
-                transform.update(imageOnly=True, alignment='canonical-frame-only', referenceObb=frame['obb'])
-            write_json(work / 'transform.json', transform)
-        image = work / 'rodin.png'
+        candidate = task.generation_work
+        self.phase(task, f'Bbox / conditional ICP / joint DINO registration and scoring, attempt {task.attempt_index}')
         with self.gpu.use(timing):
-            with timing.stage('mesh_render', cached=image.exists()):
-                if not image.exists():
-                    self.phase(task, 'Aligned Rodin mesh six-view render')
-                    write_rgb(image, join_views(self.mesh_renderer.render(work / 'rodin.glb', matrix, frame)))
-        self.phase(task, 'Export eight deliverables')
+            with timing.stage('registration_and_scoring', cached=(candidate / 'alignment.json').exists()):
+                if self.matcher is None:
+                    self.matcher = DinoMatcher(PROJECT / 'ckpt/dinov3', self.renderer.device)
+                result = align_generation(candidate / 'rodin.glb', task.job.source, task.reference_work,
+                                          candidate, self.matcher, self.sampler, self.renderer.device)
+        task.candidates.append(dict(attempt=task.attempt_index, reference=task.attempt_index // 2,
+                                    seed=(task.job.seed + task.attempt_index) % 65536,
+                                    score=result['score'], stage=result['finalStage'], status=result['status'],
+                                    matrix=result['matrix'], stages=result['stages']))
+        best = max(task.candidates, key=lambda c: -1 if c['score'] is None else c['score'])
+        accepted = best['score'] is not None and best['score'] >= MINIMUM_SCORE
+        retry = not accepted and task.attempt_index < self.max_retry
+        summary = dict(status='retrying' if retry else 'accepted' if accepted else 'below_threshold',
+                       minimumScore=MINIMUM_SCORE, maxRetry=self.max_retry, selectedAttempt=best['attempt'],
+                       selectedStage=best['stage'], score=best['score'], attempts=task.candidates)
+        write_json(work / 'alignment.json', summary)
+        if retry:
+            task.attempt_index += 1
+            task.retry_phase = 2 if task.attempt_index % 2 else 1
+            self.phase(task, f'Best score {best["score"]}; retry {task.attempt_index}/{self.max_retry}: '
+                            + ('Rodin only' if task.retry_phase == 2 else 'FAL + Rodin'))
+            return
+        task.retry_phase = None
+        selected_reference = work / 'refinements' / f'{best["reference"]:03d}'
+        selected_generation = work / 'attempts' / f'{best["attempt"]:03d}'
+        with timing.stage('write_transform'):
+            matrix = np.asarray(best['matrix'], np.float64).reshape(4, 4, order='F')
+            transform = dict(matrixOrder='column-major', rodinToWorld=dict(matrix=best['matrix']),
+                             alignment=summary['status'], alignmentScore=best['score'],
+                             selectedAttempt=best['attempt'], finalStage=best['stage'], alignmentReport=summary)
+            if (selected_reference / 'image-only.json').exists():
+                transform['imageOnly'] = True
+            write_json(work / 'transform.json', transform)
+            for name in ('fal_refine.png', 'fal-request.json', 'gaussian_filter.ply', 'gaussian_filter.png',
+                         'foreground_filter.json'):
+                shutil.copyfile(selected_reference / name, work / name)
+            sampling_file = 'image-only.json' if (selected_reference / 'image-only.json').exists() else 'condition.npz'
+            shutil.copyfile(selected_reference / sampling_file, work / sampling_file)
+            shutil.copyfile(selected_generation / 'rodin.glb', work / 'rodin.glb')
+            shutil.copyfile(selected_generation / 'rodin-request.json', work / 'rodin-request.json')
+        with self.gpu.use(timing):
+            with timing.stage('mesh_render'):
+                frame = json.loads((work / 'canonical.json').read_text())
+                write_rgb(work / 'rodin.png', join_views(self.mesh_renderer.render(work / 'rodin.glb', matrix, frame)))
+        self.phase(task, 'Export selected model, transform, scores and references')
         with timing.stage('export'):
             task.output.parent.mkdir(parents=True, exist_ok=True)
             if task.output.exists():

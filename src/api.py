@@ -21,7 +21,7 @@ NANO_SETTINGS = dict(num_images=1, aspect_ratio='2:3', resolution='1K', output_f
 RODIN_API = 'https://api.hyper3d.com/api/v2'
 RODIN_VIEW_INDICES = (0, 1, 2, 3, 5)
 RODIN_SETTINGS = dict(tier='Gen-2.5-Medium', quality='medium', mesh_mode='Raw',
-                      geometry_file_format='glb', material='None', use_original_alpha='true',
+                      geometry_file_format='glb', material='Shaded', texture_mode='extreme-low', use_original_alpha='true',
                       is_symmetric='unknown', image_label=['F', 'L', 'B', 'R', 'D'],
                       pcd_condition_cfg='true', pcd_condition_weight='0.3')
 

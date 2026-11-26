@@ -1,94 +1,35 @@
-# 材质模型配准
+# 配准模块
 
-本目录为后续配准保留的独立模块，当前第一步几何生成暂不接入，也不需要执行本目录命令。几何入口中的 `--bbox` 是测试用配准参数，第一步几何生成同样暂时不用。
+主流程已通过 `src/pipeline.py` 接入本目录，在每次 Rodin 生成后自动完成 bbox、条件 ICP、六视图 DINOv3/SIFT 与轮廓联合配准，以及评分和重试。运行入口见[项目 README](../README.md)，指标公式、相机和阈值见[配准与重试说明](../ALIGNMENT_RETRY.md)。
 
-本模块要求生成时存在有效点云 condition 和对应 FPS 记录。`transform.json` 标记 `imageOnly=true` 的仅图像结果没有这些记录，不能直接使用本模块的现有 FPS 配准流程。
+## 主流程实现
 
-独立执行已有流程：**完整逆变换 → 过滤高斯 FPS bbox → 八视角 DINOv3 / SIFT**。只优化等比缩放和平移，固定旋转；不调用生成或材质 API。
+| 模块 | 职责 |
+|---|---|
+| `generation.py` | 每次生成的候选调度、评分与 DINO 选择 |
+| `geometry.py` | GLB 读取、完整逆变换后的固定旋转 bbox 配准 |
+| `icp.py` | 可见表面 ICP，优化统一缩放和平移 |
+| `reference.py` | 六张高斯参考的相机：四侧 30°、顶底 ±90° |
+| `rendering.py` | 高斯与 mesh 在共享相机下渲染 |
+| `matching.py` | DINOv3 512/768 双尺度特征与 SIFT 对应 |
+| `iterative.py` | 联合轮廓、鲁棒特征重投影与姿态先验，最多三轮刷新对应 |
+| `rotation_math.py`、`contour_math.py` | 有界相似变换与可微轮廓优化 |
+| `scoring.py` | 分块正向距离、六视图 IoU、原始反向距离 |
 
-`transform.json` 按未包含 bbox / DINO 的完整逆变换读取。`rodin_textured.glb` 必须保持 Rodin condition 坐标，不能提前应用该矩阵。原始生成结果不被改写。
+bbox 使用网格采样点和过滤高斯 FPS 的 0.25%–99.75% 分位边界。统一缩放同时最小化三个方向的归一化尺寸误差，各方向归一化分母下限为目标最长尺寸的 5%；固定旋转并对齐中心，不做逐轴拉伸。
 
-## 输入
+DINO 使用六张完整原高斯 RGB，以 mask 筛选特征点，并用过滤高斯局部轮廓约束优化；配准和评分使用相同相机，均不使用 FAL 图片。DINO 比 bbox/ICP 最佳结果下降不超过 5 分时采用，最终得分不足 70 时由主流程重试。
 
-单个物体使用生成流程的这两组文件：
+每轮诊断保存在工作目录 `attempts/<序号>/`，包括 `alignment.json`、`matches.json`、`correspondences.npz`、`iterations.json` 与朝向初始化记录。交付的原始 `rodin.glb` 保持生成坐标，只应用一次最终 `transform.json` 中的 `rodinToWorld`。
 
-```text
-result/<scene>/<object>/
-  rodin_textured.glb       # 后续材质步骤新增的文件
-  transform.json          # 完整 condition → world 逆变换
-  gaussian_filter.ply     # 过滤后的高斯，世界坐标
+## 独立配准工具
 
-.work/<scene>/<object>/
-  config.json             # ID、原始高斯路径和 hash
-  canonical.json          # 生成时的采样坐标系
-  condition.npz           # 实际上传的 FPS、归一化矩阵
-  gaussian_filter.ply     # 生成时的过滤高斯，核对来源
-```
+`run.py` 与 `pipeline.py` 提供独立的八视角、固定旋转配准工具，不参与上述自动六视图联合流程。它要求 `rodin_textured.glb`、尚未叠加任何配准修正的完整 condition→world 逆变换，以及同批 `condition.npz` 和过滤高斯记录；不能把自动流程的最终矩阵当作原始逆变换再次输入。
 
-**配准前保留对应 `.work`。** 从过滤高斯按原算法重新采集 4096 FPS，并核对实际上传记录；使用逆变换恢复同批 FPS 的世界坐标做 bbox，不使用高斯中心代替。读取记录也用于显示准确的 condition FPS 图层。
+此工具不调用生成 API，也不执行自动评分重试。输入 GLB 须保留 Rodin condition 坐标；默认读取 emissive 纹理，base-color 纹理需显式指定 `--texture-slot base-color`。仅图像生成缺少上传点云记录，不能直接使用该工具。参数见 `python -B align/run.py --help`。
 
-输入 GLB 的已验证结构为一个节点、一个 mesh、一个三角面 primitive，内嵌纹理和 `TEXCOORD_0`。保留模型内部节点变换；导出时合并配准矩阵，二进制几何、UV 和贴图数据保持原样。默认使用已有材质文件的 `emissiveTexture`。如果材质步骤输出的是 PBR `baseColorTexture`，显式加 `--texture-slot base-color`，不自动切换纹理来源。
+独立工具输出的 `final.glb`、`bbox.glb` 已烘焙相应变换，不能再次叠加外部矩阵；这与主流程交付原始 GLB 的约定不同。
 
-## 运行
+## 依赖
 
-在 `gaussian_rodin/` 下执行，也可使用脚本绝对路径从任意目录调用：
-
-```bash
-/root/anaconda3/envs/sam3d-objects/bin/python -B align/run.py \
-  --result result/scene_001/object_001 \
-  --device cuda:1
-```
-
-默认从 `.work/scene_001/object_001` 读取采样记录。生成时用了其他工作目录则添加 `--work-dir /absolute/path/work/scene_001/object_001`。
-
-批量直接复用生成流程的 manifest：
-
-```bash
-/root/anaconda3/envs/sam3d-objects/bin/python -B align/run.py \
-  --manifest manifests/待制作物体_分割GS.json \
-  --results-root result --work-root .work \
-  --device cuda:1 --resume
-```
-
-每行使用 `scene_id` / `object_id` 定位文件。单物体缺少材质文件或发生程序错误会保存完整 traceback，批量继续处理其他物体，最后以非零状态退出。`--resume` 只复用输入、代码、权重入口、设置和输出 hash 均一致的完成结果；变化后去掉 `--resume` 重跑。
-
-细长餐具可加 `--per-view-framing`，分别确定每个视角的取景距离。每个视角内高斯、网格、特征匹配及反投影始终使用同一相机。默认按全部视角所需范围统一取景；两种模式均包含高斯 3σ 椭球、逆变换模型、bbox 模型及优化允许范围，预留 28 px 边距。
-
-## 输出
-
-默认全部放在本文件夹下，可用 `--output` 修改根目录：
-
-```text
-align/output/
-  index.html, viewer.js, overlay.js, manifest.json
-  <scene>/<object>/
-    final.glb                    # 最终模型，已经应用最终变换
-    bbox.glb                     # 逆变换 + FPS bbox 模型
-    transform.json               # condition → world 最终矩阵
-    result.json                  # 各阶段矩阵、相机、指标、状态和用时
-    stages.json, matches.json, correspondences.npz
-    pointcloud-fps-world.json     # 同批 FPS 的世界坐标
-    pointcloud-condition.json    # 实际上传的 condition FPS
-    gaussian-<view>.png           # 八视角，view = 0/2/4/6/8/10/12/14
-    inverse-<view>.png, bbox-<view>.png, final-<view>.png
-    matches-<view>.png            # 绿线内点，红线剔除的对应
-    original-gaussian.ply         # 原始高斯文件的链接
-    filtered-gaussian.ply         # 过滤高斯文件的链接
-    model.glb                    # 输入材质文件的链接
-```
-
-输出 `transform.json` 是原始 condition 模型到世界坐标的完整最终矩阵，column-major，与生成流程格式一致。输入模型已包含内部节点变换时，加载它后只应用一次该外部矩阵。**`final.glb` 和 `bbox.glb` 已经应用相应矩阵，不再叠加 `transform.json`。**
-
-上下 ±30° 两层、每层四个方位共八视角参与特征配准；视角 1/5/9/13 仅计算轮廓指标。空视角和少于六个角点的视角可正常跳过，不中断其他视角。候选不足、共识不足或几何退化时，`finalStage=bbox`，最终模型和全部调试图片照常生成，报告及页面明确显示原因。程序异常保存为 `error.json`，不伪装成正常匹配不足。DINO 求解完成但检查指标下降时保留实际结果及诊断标记，供手动查看。
-
-## Viewer 与共享依赖
-
-```bash
-python -m http.server 8910 --bind 0.0.0.0 --directory /absolute/path/gaussian_rodin
-```
-
-访问 `http://localhost:8910/align/output/`。八个图层为原始高斯、过滤高斯、未归一化 FPS、condition FPS、原始 Rodin、逆变换、逆变换加 bbox、最终结果。默认显示原始高斯和最终结果。四个模型阶段共享一次几何加载，贴图与调试图片按需加载，静止时停止连续渲染。
-
-输出中的原始资产使用文件链接；移动生成结果或源高斯后需重新生成这些链接。可选 viewer 使用本地 `third_party/three` 和 `third_party/spark`，这些浏览器依赖不随 Git 提交，使用时需另行提供并保留上游许可证。几何生成与配准计算不需要这些浏览器依赖。
-
-配准使用共享的 `ckpt/dinov3` 链接，当前指向 `/root/Lab/EditLocalization/sk_release/ckpt/dinov3`；迁移时更新链接或传 `--weights`。Python 额外依赖见 `align/requirements.txt`：`transformers==5.2.0`、`nvdiffrast==0.4.0`，已在现有 `sam3d-objects` 环境安装。CUDA 扩展使用环境已有安装；如需构建，只能在测试容器的项目目录外进行。
+权重使用项目 `ckpt/dinov3/`，由 Transformers 从本地配置与权重加载。Python 和原生依赖见 [requirements.txt](../requirements.txt)；CUDA 扩展须与 PyTorch/CUDA 匹配，构建与缓存位于项目目录外。配准计算不需要 viewer 浏览器依赖。

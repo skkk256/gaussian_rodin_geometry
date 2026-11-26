@@ -68,8 +68,15 @@ def register_inverse_fps(raw_points, target_world, inverse, world_to_bbox):
     target = target_world @ world_to_bbox[:3, :3].T + world_to_bbox[:3, 3]
     source_bounds = np.percentile(source, [0.25, 99.75], axis=0)
     target_bounds = np.percentile(target, [0.25, 99.75], axis=0)
-    assert np.ptp(source_bounds, axis=0).max() > 0
-    scale = np.ptp(target_bounds, axis=0).max() / np.ptp(source_bounds, axis=0).max()
+    source_extent = np.ptp(source_bounds, axis=0)
+    target_extent = np.ptp(target_bounds, axis=0)
+    assert np.isfinite(source_bounds).all() and np.isfinite(target_bounds).all()
+    assert source_extent.max() > 0 and target_extent.max() > 0
+    axis_normalizer = np.maximum(target_extent, .05 * target_extent.max())
+    source_normalized = source_extent / axis_normalizer
+    target_normalized = target_extent / axis_normalizer
+    scale = np.dot(source_normalized, target_normalized) / np.dot(source_normalized, source_normalized)
+    assert np.isfinite(scale) and scale > 0
     offset = target_bounds.mean(0) - scale * source_bounds.mean(0)
     correction = np.eye(4)
     correction[:3, :3] *= scale
@@ -80,6 +87,10 @@ def register_inverse_fps(raw_points, target_world, inverse, world_to_bbox):
         method='saved condition inverse, then fixed-rotation robust bbox to unnormalized filtered-Gaussian FPS',
         targetFile='pointcloud-fps-world.json', targetPoints=len(target_world), meshSamples=len(raw_points),
         fixedRotation=True, rotationCorrectionDegrees=0, quantilesPercent=[0.25, 99.75],
+        scaleObjective='three-axis normalized extent least squares',
+        minimumAxisNormalizationFraction=.05,
+        normalizedExtentResiduals=((scale * source_extent - target_extent) / axis_normalizer).tolist(),
+        normalizedExtentRMSE=float(np.sqrt(np.mean(((scale * source_extent - target_extent) / axis_normalizer)**2))),
         uniformScaleAfterInverse=float(scale), translationCanonical=offset.tolist(),
         sourceBoundsCanonical=source_bounds.tolist(), targetBoundsCanonical=target_bounds.tolist(),
         correctionCanonical=correction.flatten(order='F').tolist(),
