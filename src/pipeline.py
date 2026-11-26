@@ -27,6 +27,7 @@ import torch
 from api import FAL_MODEL, FAL_SETTINGS, NANO_MODEL, NANO_SETTINGS, RODIN_SETTINGS, RODIN_VIEW_INDICES, GenerationAPI
 from align.generation import ALIGNMENT_SETTINGS, MINIMUM_SCORE, align_generation
 from align.matching import DinoMatcher
+from alignment_worker import register_generation
 from conditions import PointSampler, filter_foreground, normalize_points
 from foreground import ForegroundSegmenter
 from gaussian import covariance_prefilter, read_ply, write_ply
@@ -299,18 +300,24 @@ class Pipeline:
                                  (task.job.seed + task.attempt_index) % 65536, work)
             validate_glb(raw_mesh)
 
-    def postprocess(self, task: Task) -> None:
+    def postprocess(self, task: Task, alignment_worker=None) -> None:
         work, timing = task.work, task.timing
         candidate = task.generation_work
         self.phase(task, f'Bbox / conditional ICP / joint DINO registration and scoring, attempt {task.attempt_index}')
-        with self.gpu.use(timing), self.segmentation.use(timing):
+        if alignment_worker is None:
+            with self.gpu.use(timing), self.segmentation.use(timing):
+                with timing.stage('registration_and_scoring', cached=(candidate / 'alignment.json').exists()):
+                    if self.matcher is None:
+                        self.matcher = DinoMatcher(PROJECT / 'ckpt/dinov3', self.renderer.device)
+                    if self.segmenter is None:
+                        self.segmenter = ForegroundSegmenter(PROJECT / 'ckpt/u2net.onnx', PROJECT / 'ckpt/isnet-general-use.onnx')
+                    result = align_generation(candidate / 'rodin.glb', task.job.source, task.reference_work,
+                                              candidate, self.matcher, self.sampler, self.segmenter, self.renderer.device)
+        else:
+            pool, device = alignment_worker
             with timing.stage('registration_and_scoring', cached=(candidate / 'alignment.json').exists()):
-                if self.matcher is None:
-                    self.matcher = DinoMatcher(PROJECT / 'ckpt/dinov3', self.renderer.device)
-                if self.segmenter is None:
-                    self.segmenter = ForegroundSegmenter(PROJECT / 'ckpt/u2net.onnx', PROJECT / 'ckpt/isnet-general-use.onnx')
-                result = align_generation(candidate / 'rodin.glb', task.job.source, task.reference_work,
-                                          candidate, self.matcher, self.sampler, self.segmenter, self.renderer.device)
+                result = pool.submit(register_generation, candidate / 'rodin.glb', task.job.source,
+                                     task.reference_work, candidate, device).result()
         task.candidates.append(dict(attempt=task.attempt_index, reference=task.attempt_index // 2,
                                     seed=(task.job.seed + task.attempt_index) % 65536,
                                     score=result['score'], stage=result['finalStage'], status=result['status'],

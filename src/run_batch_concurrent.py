@@ -20,10 +20,13 @@ def main() -> None:
     parser.add_argument('--fal-workers', type=int, default=2)
     parser.add_argument('--rodin-workers', type=int, default=2)
     parser.add_argument('--max-inflight', type=int, default=8)
+    parser.add_argument('--postprocess-devices', nargs='+', default=[],
+                        help='One independent alignment process per indexed CUDA device, e.g. cuda:5 cuda:6; omitted uses serial alignment on --device')
     args = parser.parse_args()
     jobs = load_jobs(args.manifest)
     pipeline = Pipeline(args.device, args.credentials, max_retry=args.max_retry)
-    ConcurrentBatch(pipeline, args.fal_workers, args.rodin_workers, args.max_inflight).run(jobs, args.output, args.work_dir)
+    ConcurrentBatch(pipeline, args.fal_workers, args.rodin_workers, args.max_inflight,
+                    postprocess_devices=tuple(args.postprocess_devices)).run(jobs, args.output, args.work_dir)
 
 
 if __name__ == '__main__':

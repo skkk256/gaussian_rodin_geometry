@@ -47,7 +47,7 @@ python -B -u src/run_batch_concurrent.py \
   --manifest /absolute/path/cases.json \
   --output ./result_aligned --work-dir ./.work_aligned \
   --credentials .env --device cuda:1 --max-retry 1 \
-  --fal-workers 2 --rodin-workers 2 --max-inflight 8
+  --fal-workers 2 --rodin-workers 2 --postprocess-devices cuda:2 cuda:3 --max-inflight 8
 ```
 
 | 阶段 | 同时执行数 | 内容 |
@@ -55,9 +55,9 @@ python -B -u src/run_batch_concurrent.py \
 | `preprocess_sam3d` | 1 | 属性预过滤、SAM3D 朝向估计、原高斯六视图 |
 | `fal` | `--fal-workers` | FAL 请求、前四视图分割过滤、过滤高斯渲染、FPS 与归一化 |
 | `rodin` | `--rodin-workers` | Rodin 请求、模型下载与校验 |
-| `postprocess` | 1 | bbox、条件 ICP、联合 DINO、评分选优、预览与八文件导出 |
+| `postprocess` | `--postprocess-devices` 的设备数量；省略时为 1 | bbox、条件 ICP、联合 DINO、评分选优、预览与八文件导出 |
 
-四段处理不同物体时可重叠。GPU 和前景分割资源分别使用 FIFO 锁，每个 API 工作线程独享 HTTP session。`--max-inflight` 限制已进入流水线但尚未完成的物体数。配准未达标时，任务回到 Rodin 或 FAL 阶段，使用与串行运行相同的重试策略。单项失败保存状态并继续其他项，批次最终以非零状态退出。并发模式收到 Ctrl+C 后不再接收新物体，已进入的物体完成后退出。
+四段处理不同物体时可重叠。`--postprocess-devices cuda:2 cuda:3` 启动两个独立配准进程，各自固定使用指定 GPU，独立加载 DINO、分割器与采样器，不共用主流程的 GPU／分割锁；每个进程串行处理分配给它的物体。重复设备名可在同一 GPU 启动多个进程，显存占用随进程增加，吞吐不保证线性提升。省略此参数时仍在 `--device` 上串行配准。预处理、FAL 阶段的 GPU 计算和最终预览仍在 `--device` 上使用 FIFO 锁；每个 API 工作线程独享 HTTP session。`--max-inflight` 限制已进入流水线但尚未完成的物体数。配准未达标时，任务回到 Rodin 或 FAL 阶段，使用与串行运行相同的重试策略。单项失败保存状态并继续其他项，批次最终以非零状态退出。并发模式收到 Ctrl+C 后不再接收新物体，已进入的物体完成后退出。
 
 ## 评分、重试与恢复
 

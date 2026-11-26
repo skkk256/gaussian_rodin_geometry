@@ -1,7 +1,9 @@
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
+import multiprocessing
+from queue import SimpleQueue
 import signal
 import threading
 import time
@@ -16,10 +18,12 @@ PHASES = ('preprocess_sam3d', 'fal', 'rodin', 'postprocess')
 
 
 class ConcurrentBatch:
-    def __init__(self, pipeline: Pipeline, fal_workers: int, rodin_workers: int, max_inflight: int):
+    def __init__(self, pipeline: Pipeline, fal_workers: int, rodin_workers: int, max_inflight: int, *, postprocess_devices: tuple[str, ...] = ()):
         assert fal_workers > 0 and rodin_workers > 0 and max_inflight > 0
         self.pipeline = pipeline
-        self.workers = (1, fal_workers, rodin_workers, 1)
+        self.postprocess_devices = postprocess_devices
+        self.workers = (1, fal_workers, rodin_workers, max(1, len(postprocess_devices)))
+        self.alignment_workers = SimpleQueue()
         self.max_inflight = max_inflight
         self.local = threading.local()
         self.stopping = False
@@ -41,7 +45,9 @@ class ConcurrentBatch:
             elif phase == 2:
                 self.pipeline.generate(task, self.local.api)
             else:
-                self.pipeline.postprocess(task)
+                if not hasattr(self.local, 'alignment_worker'):
+                    self.local.alignment_worker = self.alignment_workers.get()
+                self.pipeline.postprocess(task, self.local.alignment_worker)
         stage = task.timing.attempt['stages'][-1]
         print(f'{task.job.scene_id}/{task.job.object_id}: end {name}: {stage["processingSeconds"] + stage["overheadSeconds"]:.2f}s '
               f'(processing {stage["processingSeconds"]:.2f}s, queue {stage["queueSeconds"]:.2f}s, '
@@ -50,7 +56,8 @@ class ConcurrentBatch:
     def run(self, jobs: list[Job], output: Path, work: Path) -> None:
         started = time.perf_counter()
         report = dict(startedAt=datetime.now(timezone.utc).isoformat(), status='running',
-                      workers=dict(zip(PHASES, self.workers)), maxInflight=self.max_inflight,
+                      workers=dict(zip(PHASES, self.workers)), postprocessDevices=list(self.postprocess_devices),
+                      maxInflight=self.max_inflight,
                       completed=[], skipped=[], failed=[], remaining=len(jobs), totalSeconds=0.)
         report_path = work.resolve() / 'batch-timing.json'
         pending, index = {}, 0
@@ -58,6 +65,11 @@ class ConcurrentBatch:
         print(f'Pipeline workers: {report["workers"]}; max in-flight objects: {self.max_inflight}', flush=True)
         try:
             with ExitStack() as stack:
+                for device in self.postprocess_devices:
+                    pool = stack.enter_context(ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context('spawn')))
+                    self.alignment_workers.put((pool, device))
+                if not self.postprocess_devices:
+                    self.alignment_workers.put(None)
                 pools = [stack.enter_context(ThreadPoolExecutor(max_workers=count, thread_name_prefix=name))
                          for name, count in zip(PHASES, self.workers)]
                 while pending or (index < len(jobs) and not self.stopping):

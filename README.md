@@ -155,7 +155,7 @@ python -B -u src/run_batch_concurrent.py \
   --manifest /absolute/path/cases.json \
   --output ./result_aligned --work-dir ./.work_aligned \
   --credentials .env --device cuda:1 --max-retry 1 \
-  --fal-workers 2 --rodin-workers 2 --max-inflight 8
+  --fal-workers 2 --rodin-workers 2 --postprocess-devices cuda:2 cuda:3 --max-inflight 8
 ```
 
 串行批量改用 `src/run_batch.py`，省略三个并发参数。manifest 格式见 [详细运行指南](src/README.md#批量运行)。
@@ -169,6 +169,8 @@ python -B -u src/run_batch_concurrent.py \
 | `manifests/` | 本机批量示例；示例中的输入路径需按实际数据修改 |
 | `third_party/` | 几何流程使用的 SAM3D、DINOv2 源码；不包含 viewer 浏览器依赖 |
 | `align/` | 已接入主流程的 bbox、ICP、DINOv3/SIFT 联合配准与评分；另保留独立配准工具 |
+
+并发批量可用 `--postprocess-devices cuda:2 cuda:3` 在两张 GPU 上分别启动独立配准进程；每个进程独立持有 DINO、分割器和渲染状态。省略时配准仍为单 worker。API 并发与配准并发分别配置，已完成结果和已生成模型可继续复用。
 
 调用链为 `src/run_pipeline.py → Pipeline.run → generate → postprocess → align.generation.align_generation`；并发批量的 `postprocess` 阶段调用同一个方法，并按评分将任务送回 Rodin 或 FAL 阶段重试。
 
