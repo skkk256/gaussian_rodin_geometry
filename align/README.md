@@ -9,7 +9,8 @@
 | `generation.py` | 每次生成的候选调度、评分与 DINO 选择 |
 | `geometry.py` | GLB 读取、完整逆变换后的固定旋转 bbox 配准 |
 | `icp.py` | 可见表面 ICP，优化统一缩放和平移 |
-| `reference.py` | 六张高斯参考的相机：四侧 30°、顶底 ±90° |
+| `reference.py` | 六视图共享相机：四侧 30°、顶底 ±90° |
+| `routing.py` | FAL 漂移检查、侧面共同选择与顶底独立选择，背面固定高斯 |
 | `rendering.py` | 高斯与 mesh 在共享相机下渲染 |
 | `matching.py` | DINOv3 512/768 双尺度特征与 SIFT 对应 |
 | `iterative.py` | 联合轮廓、鲁棒特征重投影与姿态先验，最多三轮刷新对应 |
@@ -18,7 +19,7 @@
 
 bbox 使用网格采样点和过滤高斯 FPS 的 0.25%–99.75% 分位边界。统一缩放同时最小化三个方向的归一化尺寸误差，各方向归一化分母下限为目标最长尺寸的 5%；固定旋转并对齐中心，不做逐轴拉伸。
 
-DINO 使用六张完整原高斯 RGB，以 mask 筛选特征点，并用过滤高斯局部轮廓约束优化；配准和评分使用相同相机，均不使用 FAL 图片。DINO 比 bbox/ICP 最佳结果下降不超过 5 分时采用，最终得分不足 70 时由主流程重试。
+DINO 使用六张完整 RGB，以 mask 筛选特征点。前／右／左全部通过 FAL 漂移检查才一起用 FAL；顶／底各自判断；背面固定使用 30° 高斯，排除 0° FAL 背面。FAL 使用完整分割轮廓，高斯使用过滤高斯局部轮廓；轮廓不足 64 像素时屏蔽该视角特征和轮廓约束。配准和评分使用相同相机，评分始终参考过滤高斯。DINO 比 bbox/ICP 最佳结果下降不超过 5 分时采用，最终得分不足 70 时由主流程重试。
 
 每轮诊断保存在工作目录 `attempts/<序号>/`，包括 `alignment.json`、`matches.json`、`correspondences.npz`、`iterations.json` 与朝向初始化记录。交付的原始 `rodin.glb` 保持生成坐标，只应用一次最终 `transform.json` 中的 `rodinToWorld`。
 

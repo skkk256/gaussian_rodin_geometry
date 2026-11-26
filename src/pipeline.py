@@ -303,12 +303,14 @@ class Pipeline:
         work, timing = task.work, task.timing
         candidate = task.generation_work
         self.phase(task, f'Bbox / conditional ICP / joint DINO registration and scoring, attempt {task.attempt_index}')
-        with self.gpu.use(timing):
+        with self.gpu.use(timing), self.segmentation.use(timing):
             with timing.stage('registration_and_scoring', cached=(candidate / 'alignment.json').exists()):
                 if self.matcher is None:
                     self.matcher = DinoMatcher(PROJECT / 'ckpt/dinov3', self.renderer.device)
+                if self.segmenter is None:
+                    self.segmenter = ForegroundSegmenter(PROJECT / 'ckpt/u2net.onnx', PROJECT / 'ckpt/isnet-general-use.onnx')
                 result = align_generation(candidate / 'rodin.glb', task.job.source, task.reference_work,
-                                          candidate, self.matcher, self.sampler, self.renderer.device)
+                                          candidate, self.matcher, self.sampler, self.segmenter, self.renderer.device)
         task.candidates.append(dict(attempt=task.attempt_index, reference=task.attempt_index // 2,
                                     seed=(task.job.seed + task.attempt_index) % 65536,
                                     score=result['score'], stage=result['finalStage'], status=result['status'],

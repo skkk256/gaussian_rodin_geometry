@@ -9,28 +9,32 @@ import torch
 import trimesh
 
 from gaussian import read_ply
-from io_utils import sha256, write_json
+from io_utils import read_rgb, sha256, split_views, write_json
 from .geometry import load_glb, register_inverse_fps
 from .icp import icp, visible_indices
 from .iterative import fit_iterative
 from .reference import DINO_ANGLES, FIT, SCORE_VIEWS, reference_cameras
 from .rendering import MeshRenderer, cameras, gaussian_render
 from .scoring import AlignmentScorer, POLICY
+from .routing import FAL_VIEWS, choose_reference
 
 MINIMUM_SCORE = 70.
 DINO_SCORE_TOLERANCE = 5.
-ALIGNMENT_SETTINGS = dict(version=4, minimumScore=MINIMUM_SCORE, scoring=POLICY,
+ALIGNMENT_SETTINGS = dict(version=5, minimumScore=MINIMUM_SCORE, scoring=POLICY,
                           dinoViewIndices=FIT.tolist(),
-                          dinoAnglesRadians=DINO_ANGLES.tolist(), referenceSource='Gaussian',
+                          dinoAnglesRadians=DINO_ANGLES.tolist(),
+                          referencePolicy=dict(sideViewIndices=[0, 1, 3], sideViewsShareOneRoutingDecision=True,
+                                               independentViews=[4, 5], forcedGaussianViews=[2],
+                                               driftFeatureSize=512, dinoFeatureSizes=[512, 768], minimumContourPixels=64),
                           scoringAnglesRadians=DINO_ANGLES.tolist(), dinoScoreTolerance=DINO_SCORE_TOLERANCE,
                           icpScaleLimits=[.25, 1.5], maximumRotationDegrees=30,
                           maximumRounds=3, contourStepsPerRound=100,
                           textureSlot='declared-active-texture')
 
 
-def align_generation(mesh_path: Path, source: Path, work: Path, folder: Path, matcher, sampler, device) -> dict:
+def align_generation(mesh_path: Path, source: Path, work: Path, folder: Path, matcher, sampler, segmenter, device) -> dict:
     folder.mkdir(parents=True, exist_ok=True)
-    inputs = {name: sha256(work / name) for name in ('canonical.json', 'fal_refine.png', 'gaussian_filter.ply')}
+    inputs = {name: sha256(work / name) for name in ('canonical.json', 'gaussian.png', 'fal_refine.png', 'gaussian_filter.ply')}
     inputs['mesh'] = sha256(mesh_path)
     inputs['source'] = sha256(source)
     image_only = (work / 'image-only.json').exists()
@@ -85,17 +89,33 @@ def align_generation(mesh_path: Path, source: Path, work: Path, folder: Path, ma
         contour = np.stack([cv2.erode((a > .5).astype(np.float32), np.ones((3, 3), np.uint8)) for a in filtered_alpha])
         np.savez_compressed(reference_cache, rgb=original_rgb, alpha=reference_alpha, contour=contour,
                             original_alpha=original_alpha, filtered_alpha=filtered_alpha, views=views, K=K)
-        write_json(work / 'reference-routing.json', dict(source='Gaussian',
-            views=[dict(view=int(i), source='Gaussian', anglesDegrees=np.rad2deg(DINO_ANGLES[i]).tolist()) for i in FIT],
-            policy='Original Gaussian RGB and partial filtered-Gaussian contours for all six fitting views',
-            reason='Explicit Gaussian-only reference; no FAL matching or drift check',
-            gaussianImagesUsedForMatching=True, gaussianImagesUsedForContours=True,
-            correction='none; complete rendered images enter DINO without cropping'))
-    routing = json.loads((work / 'reference-routing.json').read_text())
-    assert routing['source'] == 'Gaussian'
     with np.load(reference_cache) as saved:
         reference_rgb, reference_alpha, contour, original_alpha, filtered_alpha = (
             saved[name] for name in ('rgb', 'alpha', 'contour', 'original_alpha', 'filtered_alpha'))
+    mixed_cache = work / 'alignment-reference.npz'
+    if not mixed_cache.exists():
+        fal = np.stack(split_views(read_rgb(work / 'fal_refine.png')))
+        fal_alpha = np.zeros_like(original_alpha)
+        for i in FAL_VIEWS:
+            fal_alpha[i] = np.maximum(segmenter.predict(fal[i]), segmenter.predict_detail(fal[i]))
+        scan = np.stack(split_views(read_rgb(work / 'gaussian.png')))
+        routing = choose_reference(matcher, scan, fal, fal_alpha)
+        for i, source_name in enumerate(routing['sources']):
+            if source_name == 'FAL':
+                reference_rgb[i] = fal[i]
+                reference_alpha[i] = fal_alpha[i]
+                contour[i] = fal_alpha[i]
+        reference_alpha[(contour > .5).sum((1, 2)) < 64] = 0
+        routing['activeViews'] = np.flatnonzero((contour > .5).sum((1, 2)) >= 64).tolist()
+        routing['pixelCounts'] = (contour > .5).sum((1, 2)).tolist()
+        write_json(work / 'reference-routing.json', routing)
+        np.savez_compressed(mixed_cache, rgb=reference_rgb, alpha=reference_alpha, contour=contour,
+                            sources=np.asarray(routing['sources']))
+    routing = json.loads((work / 'reference-routing.json').read_text())
+    with np.load(mixed_cache) as saved:
+        reference_rgb, reference_alpha, contour = (saved[name] for name in ('rgb', 'alpha', 'contour'))
+        assert saved['sources'].tolist() == routing['sources']
+    assert routing['sources'][2] == 'Gaussian'
     assert len(reference_rgb) == len(reference_alpha) == len(contour) == len(original_alpha) == len(FIT)
     assert len(filtered_alpha) == len(SCORE_VIEWS)
     scorer = AlignmentScorer(target, device)
@@ -134,7 +154,7 @@ def align_generation(mesh_path: Path, source: Path, work: Path, folder: Path, ma
     with torch.cuda.device(device):
         delta, errors, initial_errors, fit, records, counts = fit_iterative(case, matcher, folder,
             reference_rgb, reference_alpha, mesh_rgb, mesh_alpha, mesh_depth, views, K, mesh, C,
-            contour=contour, original_alpha=original_alpha, source=[routing['source']] * len(FIT),
+            contour=contour, original_alpha=original_alpha, source=routing['sources'],
             view_weights=np.ones(len(FIT)))
     candidate = P @ delta @ C
     score = evaluate('dino', candidate)
